@@ -451,6 +451,16 @@ function handleHits() {
   });
 }
 
+function proxyAbTestingRedirect() {
+  const qs = getRequestQueryString();
+  sendHttpGet(matomoUrl + ABTESTING_PATH + (qs ? '?' + qs : ''), function (statusCode, headers) {
+    setResponseStatus(statusCode);
+    if (headers && headers.location) setResponseHeader('Location', headers.location);
+    setResponseHeader('Cache-Control', 'no-store');
+    returnResponse();
+  }, { timeout: 5000 });
+}
+
 // ---- main ----
 const requestPath = getRequestPath();
 const requestMethod = getRequestMethod();
@@ -465,6 +475,9 @@ if (requestPath === jsPath && requestMethod === 'GET') {
   } else {
     handleHits();
   }
+} else if (data.proxyAbTesting && requestPath === ABTESTING_PATH && requestMethod === 'GET') {
+  claimRequest();
+  proxyAbTestingRedirect();
 }
 
 
@@ -877,6 +890,21 @@ scenarios:
     const ev = runTracker('GET', 'idsite=1&rec=1')[0];
     assertThat(Object.keys(ev).indexOf('user_id')).isEqualTo(-1);
     assertThat(Object.keys(ev).indexOf('page_title')).isEqualTo(-1);
+- name: proxies A/B testing redirect when enabled
+  code: |-
+    let requested;
+    mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    mock('getRequestQueryString', 'id=3');
+    mock('sendHttpGet', function (url, cb) { requested = url; cb(302, { location: 'https://www.example.com/variant' }, ''); });
+    runCode(withData({ proxyAbTesting: true }));
+    assertThat(requested).isEqualTo('https://matomo.example.com/plugins/AbTesting/redirect.php?id=3');
+    assertApi('setResponseStatus').wasCalledWith(302);
+    assertApi('setResponseHeader').wasCalledWith('Location', 'https://www.example.com/variant');
+- name: does not claim A/B testing redirect when disabled
+  code: |-
+    mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    runCode(mockData);
+    assertApi('claimRequest').wasNotCalled();
 setup: |-
   const encodeUriComponent = require('encodeUriComponent');
   const Object = require('Object');

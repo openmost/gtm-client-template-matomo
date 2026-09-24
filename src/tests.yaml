@@ -221,6 +221,21 @@ scenarios:
     const ev = runTracker('GET', 'idsite=1&rec=1')[0];
     assertThat(Object.keys(ev).indexOf('user_id')).isEqualTo(-1);
     assertThat(Object.keys(ev).indexOf('page_title')).isEqualTo(-1);
+- name: proxies A/B testing redirect when enabled
+  code: |-
+    let requested;
+    mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    mock('getRequestQueryString', 'id=3');
+    mock('sendHttpGet', function (url, cb) { requested = url; cb(302, { location: 'https://www.example.com/variant' }, ''); });
+    runCode(withData({ proxyAbTesting: true }));
+    assertThat(requested).isEqualTo('https://matomo.example.com/plugins/AbTesting/redirect.php?id=3');
+    assertApi('setResponseStatus').wasCalledWith(302);
+    assertApi('setResponseHeader').wasCalledWith('Location', 'https://www.example.com/variant');
+- name: does not claim A/B testing redirect when disabled
+  code: |-
+    mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    runCode(mockData);
+    assertApi('claimRequest').wasNotCalled();
 setup: |-
   const encodeUriComponent = require('encodeUriComponent');
   const Object = require('Object');
