@@ -5,7 +5,17 @@
     "displayName": "Matomo instance URL",
     "simpleValueType": true,
     "help": "Base URL of your Matomo instance, e.g. https://analytics.example.com",
-    "valueValidators": [{ "type": "NON_EMPTY" }, { "type": "REGEX", "args": ["^https?://.+"] }]
+    "valueValidators": [
+      {
+        "type": "NON_EMPTY"
+      },
+      {
+        "type": "REGEX",
+        "args": [
+          "^https?://.+"
+        ]
+      }
+    ]
   },
   {
     "type": "TEXT",
@@ -14,7 +24,17 @@
     "simpleValueType": true,
     "defaultValue": "/matomo.js",
     "help": "Path on your server-side GTM domain that serves matomo.js. Use a neutral path such as /js/app.js to avoid ad blockers.",
-    "valueValidators": [{ "type": "NON_EMPTY" }, { "type": "REGEX", "args": ["^/.*"] }]
+    "valueValidators": [
+      {
+        "type": "NON_EMPTY"
+      },
+      {
+        "type": "REGEX",
+        "args": [
+          "^/.*"
+        ]
+      }
+    ]
   },
   {
     "type": "TEXT",
@@ -23,7 +43,17 @@
     "simpleValueType": true,
     "defaultValue": "/matomo.php",
     "help": "Path that receives tracking hits. Set the same value in setTrackerUrl() of your Matomo snippet.",
-    "valueValidators": [{ "type": "NON_EMPTY" }, { "type": "REGEX", "args": ["^/.*"] }]
+    "valueValidators": [
+      {
+        "type": "NON_EMPTY"
+      },
+      {
+        "type": "REGEX",
+        "args": [
+          "^/.*"
+        ]
+      }
+    ]
   },
   {
     "type": "TEXT",
@@ -31,7 +61,11 @@
     "displayName": "Tracker JS cache duration (hours)",
     "simpleValueType": true,
     "defaultValue": "12",
-    "valueValidators": [{ "type": "POSITIVE_NUMBER" }]
+    "valueValidators": [
+      {
+        "type": "POSITIVE_NUMBER"
+      }
+    ]
   },
   {
     "type": "TEXT",
@@ -45,7 +79,16 @@
     "name": "allowedSiteIds",
     "displayName": "Allowed Matomo site IDs",
     "simpleValueType": true,
-    "help": "Comma-separated list, e.g. 1, 3. Hits for other site IDs are dropped, so nobody can use your server container to send data to other sites of your Matomo instance. Leave empty to accept any site."
+    "help": "Comma-separated list of exact site IDs, e.g. 1, 3 (no wildcards). Hits for other site IDs are dropped. Leave empty to accept any site, like Matomo itself.",
+    "valueValidators": [
+      {
+        "type": "REGEX",
+        "args": [
+          "^s*$|^s*d+(s*,s*d+)*s*$"
+        ],
+        "errorMessage": "Use numeric site IDs separated by commas, e.g. 1, 3"
+      }
+    ]
   },
   {
     "type": "CHECKBOX",
@@ -61,8 +104,18 @@
     "simpleValueType": true,
     "defaultValue": "5",
     "help": "Published containers are cached for this duration. Preview containers (_preview) are never cached.",
-    "valueValidators": [{ "type": "POSITIVE_NUMBER" }],
-    "enablingConditions": [{ "paramName": "proxyMtm", "paramValue": true, "type": "EQUALS" }]
+    "valueValidators": [
+      {
+        "type": "POSITIVE_NUMBER"
+      }
+    ],
+    "enablingConditions": [
+      {
+        "paramName": "proxyMtm",
+        "paramValue": true,
+        "type": "EQUALS"
+      }
+    ]
   },
   {
     "type": "CHECKBOX",

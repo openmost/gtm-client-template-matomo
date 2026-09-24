@@ -112,7 +112,16 @@ ___TEMPLATE_PARAMETERS___
     "name": "allowedSiteIds",
     "displayName": "Allowed Matomo site IDs",
     "simpleValueType": true,
-    "help": "Comma-separated list, e.g. 1, 3. Hits for other site IDs are dropped, so nobody can use your server container to send data to other sites of your Matomo instance. Leave empty to accept any site."
+    "help": "Comma-separated list of exact site IDs, e.g. 1, 3 (no wildcards). Hits for other site IDs are dropped. Leave empty to accept any site, like Matomo itself.",
+    "valueValidators": [
+      {
+        "type": "REGEX",
+        "args": [
+          "^s*$|^s*d+(s*,s*d+)*s*$"
+        ],
+        "errorMessage": "Use numeric site IDs separated by commas, e.g. 1, 3"
+      }
+    ]
   },
   {
     "type": "CHECKBOX",
