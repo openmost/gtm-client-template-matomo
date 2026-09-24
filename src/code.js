@@ -30,6 +30,8 @@ const jsPath = data.jsPath || '/matomo.js';
 const trackerPath = data.trackerPath || '/matomo.php';
 const jsCacheKey = 'openmost_matomo_js|' + matomoUrl;
 const MTM_PREFIX = '/js/container_';
+// The Matomo tag adds token_auth: parameters that need it must never come from the browser.
+const PRIVILEGED_PARAMS = ['token_auth', 'cip', 'cdt', 'cdo', 'country', 'region', 'city', 'lat', 'long'];
 const ID_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_';
 
 function stripTrailingSlash(url) {
@@ -366,7 +368,7 @@ function handleHits() {
   const wantsImage = getRequestMethod() === 'GET' &&
     hitValue(parseQuery(getRequestQueryString()), 'send_image') !== '0';
   const hits = extractHits().filter(function (hit) {
-    Object.delete(hit, 'token_auth');
+    PRIVILEGED_PARAMS.forEach(function (k) { Object.delete(hit, k); });
     const idsite = hitValue(hit, 'idsite');
     return idsite && isSiteAllowed(idsite) && !isHeatmapHit(hit);
   });

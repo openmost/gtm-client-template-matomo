@@ -88,7 +88,7 @@ Tick **Proxy the Matomo opt-out script**, then use the opt-out code from *Admini
 | Public path of the tracking endpoint | `/matomo.php` | Path receiving tracking hits |
 | Tracker JS cache duration | 12 h | How long `matomo.js` is cached by the server container and browsers |
 | Allowed origins | any | Comma-separated list of origins allowed to send hits |
-| Allowed Matomo site IDs | any | Hits for other site IDs are dropped. **Recommended**, otherwise anyone can use your container to send data to any site of your Matomo instance |
+| Allowed Matomo site IDs | any | Hits for other site IDs are dropped. Empty = any site, like Matomo itself |
 | Proxy Matomo Tag Manager containers | off | Serves `/js/container_XXXX.js` |
 | Matomo Tag Manager container cache duration | 5 min | Cache of published containers |
 | Proxy the Matomo opt-out script | off | Serves `/index.php?module=CoreAdminHome&action=optOutJS…` only |
@@ -120,7 +120,7 @@ Matomo-specific fields:
 
 ## Security
 
-- `token_auth` is stripped from incoming hits.
+- `token_auth` and the parameters that require it (`cip`, `cdt`, `cdo`, `country`, `region`, `city`, `lat`, `long`) are stripped from incoming hits: nobody can use the token added by the Matomo tag to backdate visits or fake locations. `matomo.js` never sends them.
 - Use **Allowed Matomo site IDs** and **Allowed origins** to restrict what can be sent through your container.
 - The opt-out proxy only relays the `optOutJS` action; no other Matomo page is exposed.
 

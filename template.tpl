@@ -192,6 +192,8 @@ const jsPath = data.jsPath || '/matomo.js';
 const trackerPath = data.trackerPath || '/matomo.php';
 const jsCacheKey = 'openmost_matomo_js|' + matomoUrl;
 const MTM_PREFIX = '/js/container_';
+// The Matomo tag adds token_auth: parameters that need it must never come from the browser.
+const PRIVILEGED_PARAMS = ['token_auth', 'cip', 'cdt', 'cdo', 'country', 'region', 'city', 'lat', 'long'];
 const ID_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_';
 
 function stripTrailingSlash(url) {
@@ -528,7 +530,7 @@ function handleHits() {
   const wantsImage = getRequestMethod() === 'GET' &&
     hitValue(parseQuery(getRequestQueryString()), 'send_image') !== '0';
   const hits = extractHits().filter(function (hit) {
-    Object.delete(hit, 'token_auth');
+    PRIVILEGED_PARAMS.forEach(function (k) { Object.delete(hit, k); });
     const idsite = hitValue(hit, 'idsite');
     return idsite && isSiteAllowed(idsite) && !isHeatmapHit(hit);
   });
@@ -918,6 +920,14 @@ scenarios:
   code: |-
     const events = runTracker('GET', 'idsite=1&rec=1&token_auth=secret');
     assertThat(events[0]['x-matomo-hit'].token_auth).isUndefined();
+- name: parameters that require a token are stripped from browser hits
+  code: |-
+    const events = runTracker('GET', 'idsite=1&rec=1&url=https%3A%2F%2Fx.fr%2F&cip=1.2.3.4&cdt=1500000000&cdo=3600&country=us&region=CA&city=Paris&lat=1.5&long=2.5');
+    const hit = events[0]['x-matomo-hit'];
+    ['cip', 'cdt', 'cdo', 'country', 'region', 'city', 'lat', 'long'].forEach(function (k) {
+      assertThat(hit[k], k).isUndefined();
+    });
+    assertThat(hit.url).isEqualTo('https://x.fr/');
 - name: repeated keys become arrays
   code: |-
     const events = runTracker('GET', 'idsite=1&rec=1&fa_fp%5B%5D=a&fa_fp%5B%5D=b');
