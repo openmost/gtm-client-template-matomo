@@ -673,7 +673,7 @@ scenarios:
     mock('getRequestPath', '/other');
     runCode(mockData);
     assertApi('claimRequest').wasNotCalled();
-- name: serves matomo.js from fresh cache
+- name: serves tracker JS from fresh cache
   code: |-
     mock('getRequestPath', '/js/app.js');
     mock('getTimestampMillis', 1000000);
@@ -690,7 +690,7 @@ scenarios:
     assertApi('setResponseHeader').wasCalledWith('Cache-Control', 'public, max-age=43200');
     assertApi('setResponseBody').wasCalledWith('CACHED');
     assertApi('returnResponse').wasCalled();
-- name: fetches matomo.js when cache expired and stores it
+- name: fetches tracker JS when cache expired and stores it
   code: |-
     let fetchedUrl;
     let stored;
@@ -706,7 +706,7 @@ scenarios:
     assertThat(fetchedUrl).isEqualTo('https://matomo.example.com/matomo.js');
     assertThat(stored).isEqualTo({ body: 'FRESH', ts: 50000000 });
     assertApi('setResponseBody').wasCalledWith('FRESH');
-- name: serves stale matomo.js when instance fails
+- name: serves stale tracker JS when instance fails
   code: |-
     mock('getRequestPath', '/js/app.js');
     mock('getTimestampMillis', 50000000);
@@ -718,7 +718,7 @@ scenarios:
     mock('sendHttpGet', function (url, cb) { cb(500, {}, ''); });
     runCode(mockData);
     assertApi('setResponseBody').wasCalledWith('OLD');
-- name: returns 502 when no matomo.js is available
+- name: returns 502 when no tracker JS is available
   code: |-
     mock('getRequestPath', '/js/app.js');
     mock('sendHttpGet', function (url, cb) { cb(503, {}, ''); });
@@ -758,7 +758,7 @@ scenarios:
     const events = runTracker('POST', 'idsite=1&rec=1&action_name=Home', '');
     assertThat(events.length).isEqualTo(1);
     assertThat(events[0]['x-matomo-hit'].action_name).isEqualTo('Home');
-- name: POST body is decoded as form-urlencoded with UTF-8 and plus signs
+- name: POST body is decoded as form urlencoded with UTF8 and plus signs
   code: |-
     const events = runTracker('POST', '', 'idsite=1&rec=1&action_name=Caf%C3%A9+cr%C3%A8me&url=https%3A%2F%2Fx.fr%2F');
     assertThat(events[0]['x-matomo-hit'].action_name).isEqualTo('Café crème');
@@ -773,7 +773,7 @@ scenarios:
     assertThat(events[2]['x-matomo-hit'].e_c).isEqualTo('c');
     assertThat(responses).isEqualTo(1);
     assertApi('setResponseStatus').wasCalledWith(204);
-- name: token_auth sent by a browser is stripped
+- name: token auth sent by a browser is stripped
   code: |-
     const events = runTracker('GET', 'idsite=1&rec=1&token_auth=secret');
     assertThat(events[0]['x-matomo-hit'].token_auth).isUndefined();
@@ -792,7 +792,7 @@ scenarios:
     const events = runTracker('GET', 'rec=1&url=https%3A%2F%2Fx.fr%2F');
     assertThat(events.length).isEqualTo(0);
     assertApi('setResponseStatus').wasCalledWith(204);
-- name: GET with send_image=1 returns a pixel
+- name: GET with send image 1 returns a pixel
   code: |-
     runTracker('GET', 'idsite=1&rec=1&send_image=1');
     assertApi('setPixelResponse').wasCalled();
@@ -836,7 +836,7 @@ scenarios:
     mock('getCookieValues', function (name) { return name === 'matomo_ignore' ? ['*'] : []; });
     const ev = runTracker('GET', 'idsite=1&rec=1')[0];
     assertThat(ev['x-matomo-request']).isEqualTo({ referer: 'https://www.example.com/p', dnt: '1', 'sec-ch-ua': '"Chromium";v="128"', ignore_cookie: '*' });
-- name: maps every hit type to its event_name
+- name: maps every hit type to its event name
   code: |-
     const cases = [
       ['fa_id=f1&fa_ef=1', 'matomo_form'],
@@ -890,7 +890,7 @@ scenarios:
     const ev = runTracker('GET', 'idsite=1&rec=1')[0];
     assertThat(Object.keys(ev).indexOf('user_id')).isEqualTo(-1);
     assertThat(Object.keys(ev).indexOf('page_title')).isEqualTo(-1);
-- name: proxies A/B testing redirect when enabled
+- name: proxies AB testing redirect when enabled
   code: |-
     let requested;
     mock('getRequestPath', '/plugins/AbTesting/redirect.php');
@@ -900,7 +900,7 @@ scenarios:
     assertThat(requested).isEqualTo('https://matomo.example.com/plugins/AbTesting/redirect.php?id=3');
     assertApi('setResponseStatus').wasCalledWith(302);
     assertApi('setResponseHeader').wasCalledWith('Location', 'https://www.example.com/variant');
-- name: does not claim A/B testing redirect when disabled
+- name: does not claim AB testing redirect when disabled
   code: |-
     mock('getRequestPath', '/plugins/AbTesting/redirect.php');
     runCode(mockData);
