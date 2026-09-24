@@ -117,7 +117,7 @@ ___TEMPLATE_PARAMETERS___
       {
         "type": "REGEX",
         "args": [
-          "^s*$|^s*d+(s*,s*d+)*s*$"
+          "^[0-9, ]*$"
         ],
         "errorMessage": "Use numeric site IDs separated by commas, e.g. 1, 3"
       }
