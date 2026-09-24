@@ -15,5 +15,5 @@
 homepage: "https://openmost.com"
 documentation: "https://github.com/openmost/gtm-client-template-matomo"
 versions:
-  - sha: 7623a810c42b141abd989434c2e9bf4475e9e78d
+  - sha: 9ba6396ff6f4272b45e77e4bb3f501bfd8e92a67
     changeNotes: Initial Version
