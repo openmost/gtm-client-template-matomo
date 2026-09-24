@@ -1,0 +1,50 @@
+[
+  {
+    "type": "TEXT",
+    "name": "matomoUrl",
+    "displayName": "Matomo instance URL",
+    "simpleValueType": true,
+    "help": "Base URL of your Matomo instance, e.g. https://analytics.example.com",
+    "valueValidators": [{ "type": "NON_EMPTY" }, { "type": "REGEX", "args": ["^https?://.+"] }]
+  },
+  {
+    "type": "TEXT",
+    "name": "jsPath",
+    "displayName": "Public path of the tracker JS",
+    "simpleValueType": true,
+    "defaultValue": "/matomo.js",
+    "help": "Path on your server-side GTM domain that serves matomo.js. Use a neutral path such as /js/app.js to avoid ad blockers.",
+    "valueValidators": [{ "type": "NON_EMPTY" }, { "type": "REGEX", "args": ["^/.*"] }]
+  },
+  {
+    "type": "TEXT",
+    "name": "trackerPath",
+    "displayName": "Public path of the tracking endpoint",
+    "simpleValueType": true,
+    "defaultValue": "/matomo.php",
+    "help": "Path that receives tracking hits. Set the same value in setTrackerUrl() of your Matomo snippet.",
+    "valueValidators": [{ "type": "NON_EMPTY" }, { "type": "REGEX", "args": ["^/.*"] }]
+  },
+  {
+    "type": "TEXT",
+    "name": "jsCacheHours",
+    "displayName": "Tracker JS cache duration (hours)",
+    "simpleValueType": true,
+    "defaultValue": "12",
+    "valueValidators": [{ "type": "POSITIVE_NUMBER" }]
+  },
+  {
+    "type": "TEXT",
+    "name": "allowedOrigins",
+    "displayName": "Allowed origins",
+    "simpleValueType": true,
+    "help": "Comma-separated list, e.g. https://www.example.com, https://shop.example.com. Leave empty to accept any origin."
+  },
+  {
+    "type": "CHECKBOX",
+    "name": "proxyAbTesting",
+    "checkboxText": "Proxy A/B Testing redirect experiments (/plugins/AbTesting/redirect.php)",
+    "simpleValueType": true,
+    "defaultValue": false
+  }
+]

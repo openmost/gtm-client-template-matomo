@@ -1,0 +1,107 @@
+scenarios:
+- name: ignores unrelated paths
+  code: |-
+    mock('getRequestPath', '/other');
+    runCode(mockData);
+    assertApi('claimRequest').wasNotCalled();
+- name: serves matomo.js from fresh cache
+  code: |-
+    mock('getRequestPath', '/js/app.js');
+    mock('getTimestampMillis', 1000000);
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return { body: 'CACHED', ts: 999000 }; },
+      setItemCopy: function () { fail('must not write cache'); },
+      removeItem: function () {}
+    });
+    runCode(mockData);
+    assertApi('claimRequest').wasCalled();
+    assertApi('sendHttpGet').wasNotCalled();
+    assertApi('setResponseStatus').wasCalledWith(200);
+    assertApi('setResponseHeader').wasCalledWith('Content-Type', 'application/javascript; charset=utf-8');
+    assertApi('setResponseHeader').wasCalledWith('Cache-Control', 'public, max-age=43200');
+    assertApi('setResponseBody').wasCalledWith('CACHED');
+    assertApi('returnResponse').wasCalled();
+- name: fetches matomo.js when cache expired and stores it
+  code: |-
+    let fetchedUrl;
+    let stored;
+    mock('getRequestPath', '/js/app.js');
+    mock('getTimestampMillis', 50000000);
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return { body: 'OLD', ts: 0 }; },
+      setItemCopy: function (key, value) { stored = value; },
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb, options) { fetchedUrl = url; cb(200, {}, 'FRESH'); });
+    runCode(mockData);
+    assertThat(fetchedUrl).isEqualTo('https://matomo.example.com/matomo.js');
+    assertThat(stored).isEqualTo({ body: 'FRESH', ts: 50000000 });
+    assertApi('setResponseBody').wasCalledWith('FRESH');
+- name: serves stale matomo.js when instance fails
+  code: |-
+    mock('getRequestPath', '/js/app.js');
+    mock('getTimestampMillis', 50000000);
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return { body: 'OLD', ts: 0 }; },
+      setItemCopy: function () {},
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb) { cb(500, {}, ''); });
+    runCode(mockData);
+    assertApi('setResponseBody').wasCalledWith('OLD');
+- name: returns 502 when no matomo.js is available
+  code: |-
+    mock('getRequestPath', '/js/app.js');
+    mock('sendHttpGet', function (url, cb) { cb(503, {}, ''); });
+    runCode(mockData);
+    assertApi('setResponseStatus').wasCalledWith(502);
+    assertApi('returnResponse').wasCalled();
+- name: answers CORS preflight on tracker path
+  code: |-
+    mock('getRequestPath', '/collect');
+    mock('getRequestMethod', 'OPTIONS');
+    mock('getRequestHeader', headers({ origin: 'https://www.example.com' }));
+    runCode(mockData);
+    assertApi('setResponseStatus').wasCalledWith(204);
+    assertApi('setResponseHeader').wasCalledWith('Access-Control-Allow-Origin', 'https://www.example.com');
+    assertApi('setResponseHeader').wasCalledWith('Access-Control-Allow-Credentials', 'true');
+    assertApi('setResponseHeader').wasCalledWith('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    assertApi('runContainer').wasNotCalled();
+- name: rejects preflight from an origin that is not allowed
+  code: |-
+    mock('getRequestPath', '/collect');
+    mock('getRequestMethod', 'OPTIONS');
+    mock('getRequestHeader', headers({ origin: 'https://evil.example.org' }));
+    runCode(withData({ allowedOrigins: 'https://www.example.com, https://shop.example.com' }));
+    assertApi('setResponseStatus').wasCalledWith(403);
+    assertApi('setResponseHeader').wasNotCalledWith('Access-Control-Allow-Origin', 'https://evil.example.org');
+setup: |-
+  const encodeUriComponent = require('encodeUriComponent');
+  const Object = require('Object');
+  const mockData = {
+    matomoUrl: 'https://matomo.example.com/',
+    jsPath: '/js/app.js',
+    trackerPath: '/collect',
+    jsCacheHours: '12',
+    allowedOrigins: '',
+    proxyAbTesting: false
+  };
+  function withData(extra) {
+    const d = {};
+    Object.keys(mockData).forEach(function (k) { d[k] = mockData[k]; });
+    Object.keys(extra || {}).forEach(function (k) { d[k] = extra[k]; });
+    return d;
+  }
+  function headers(map) {
+    return function (name) { return map[name]; };
+  }
+  function runTracker(method, query, body, extra) {
+    const events = [];
+    mock('getRequestPath', '/collect');
+    mock('getRequestMethod', method);
+    mock('getRequestQueryString', query || '');
+    mock('getRequestBody', body || '');
+    mock('runContainer', function (event, onComplete) { events.push(event); onComplete(); });
+    runCode(withData(extra));
+    return events;
+  }
