@@ -1,10 +1,11 @@
 # Matomo Client — server-side Google Tag Manager template
 
-A server-side GTM **Client** that makes Matomo tracking first-party:
+A server-side GTM **Client** that makes Matomo tracking first-party. The browser never talks to your Matomo instance anymore, only to your server-side GTM domain:
 
 - serves `matomo.js` (premium plugins included) from your own domain, on a path of your choice, with caching;
-- receives every `matomo.php` hit — GET, `sendBeacon` POST, XHR POST and **bulk** requests — and answers `204` with proper CORS headers;
-- runs the container **once per hit** with a **dual-format event**: standard sGTM fields (`page_view`, `purchase`, `items`, `client_id`, `ip_override`…) usable by any tag (GA4, Meta CAPI, BigQuery…), plus the raw Matomo hit in `x-matomo-hit` for lossless forwarding with the **Matomo (server)** tag.
+- serves **Matomo Tag Manager containers** (`/js/container_XXXX.js`) and the **opt-out script** the same way;
+- receives every `matomo.php` hit — GET, `sendBeacon` POST, XHR POST and **bulk** requests — and answers like Matomo (`204` or GIF) with proper CORS headers;
+- runs the container **once per hit, in order**, with the raw Matomo hit preserved in `x-matomo-hit`. The [**Matomo (server)**](https://github.com/openmost/gtm-tag-template-matomo-server) tag forwards it to Matomo losslessly.
 
 Supports FormAnalytics, MediaAnalytics, AbTesting (including redirect experiments), CrashAnalytics, ecommerce, goals, content tracking, custom dimensions and page performance. Heatmaps & session recording are intentionally not proxied.
 
@@ -12,12 +13,23 @@ Authored by Ronan HELLO — [Openmost](https://openmost.com).
 
 ---
 
-## Setup
+## How it works
+
+```
+browser ──matomo.js / hits──► Matomo Client ──event──► server container
+                                                         ├─ Matomo (server) tag ──► Matomo
+                                                         └─ optional: Google Ads, Meta CAPI…
+```
+
+The client itself sends nothing to Matomo: add the **Matomo (server)** tag, triggered on events claimed by this client. Because hits go through your container, you can also filter, enrich or strip them before they reach Matomo, and keep the URL of your Matomo instance private.
+
+## Setup with the JavaScript tracker
 
 1. In your server container, create a client from this template:
    - **Matomo instance URL**: `https://analytics.example.com`
    - **Public path of the tracker JS**: e.g. `/js/app.js`
    - **Public path of the tracking endpoint**: e.g. `/collect`
+   - **Allowed Matomo site IDs**: e.g. `1`
 2. Point your Matomo snippet to your server-side GTM domain:
 
 ```html
@@ -35,7 +47,37 @@ Authored by Ronan HELLO — [Openmost](https://openmost.com).
 </script>
 ```
 
-3. Add the [**Matomo (server)**](https://github.com/openmost/gtm-tag-template-matomo-server) tag, triggered on events claimed by this client (`Client Name` equals the name of this client).
+3. Add the **Matomo (server)** tag with the trigger `Client Name equals <name of this client>`.
+
+## Setup with Matomo Tag Manager
+
+1. Tick **Proxy Matomo Tag Manager containers**.
+2. In Matomo Tag Manager, edit your **Matomo Configuration** variable:
+   - **Matomo URL**: `https://sgtm.example.com`
+   - Advanced settings: custom **JS endpoint** = your tracker JS path (e.g. `js/app.js`) and custom **tracking endpoint** = your tracking path (e.g. `collect`).
+3. Publish, then load the container from your sGTM domain:
+
+```html
+<script>
+  var _mtm = window._mtm = window._mtm || [];
+  _mtm.push({'mtm.startTime': (new Date().getTime()), 'event': 'mtm.Start'});
+  (function() {
+    var d = document, g = d.createElement('script'), s = d.getElementsByTagName('script')[0];
+    g.async = true; g.src = 'https://sgtm.example.com/js/container_XXXX.js'; s.parentNode.insertBefore(g, s);
+  })();
+</script>
+```
+
+Published containers are cached for a few minutes (configurable). Preview containers (`container_XXXX_preview.js`) are never cached, so Matomo Tag Manager's preview mode keeps working.
+
+## Opt-out
+
+Tick **Proxy the Matomo opt-out script**, then use the opt-out code from *Administration → Privacy → Users opt-out* with your sGTM domain instead of your Matomo URL:
+
+```html
+<div id="matomo-opt-out"></div>
+<script src="https://sgtm.example.com/index.php?module=CoreAdminHome&action=optOutJS&divId=matomo-opt-out&language=auto&showIntro=1"></script>
+```
 
 ## Settings
 
@@ -46,6 +88,10 @@ Authored by Ronan HELLO — [Openmost](https://openmost.com).
 | Public path of the tracking endpoint | `/matomo.php` | Path receiving tracking hits |
 | Tracker JS cache duration | 12 h | How long `matomo.js` is cached by the server container and browsers |
 | Allowed origins | any | Comma-separated list of origins allowed to send hits |
+| Allowed Matomo site IDs | any | Hits for other site IDs are dropped. **Recommended**, otherwise anyone can use your container to send data to any site of your Matomo instance |
+| Proxy Matomo Tag Manager containers | off | Serves `/js/container_XXXX.js` |
+| Matomo Tag Manager container cache duration | 5 min | Cache of published containers |
+| Proxy the Matomo opt-out script | off | Serves `/index.php?module=CoreAdminHome&action=optOutJS…` only |
 | Proxy A/B Testing redirects | off | Relays `/plugins/AbTesting/redirect.php` for redirect experiments |
 
 ## Event data
@@ -65,15 +111,18 @@ Authored by Ronan HELLO — [Openmost](https://openmost.com).
 
 Common fields: `page_location`, `page_title`, `page_referrer`, `client_id` (Matomo visitor ID, empty without cookie consent), `user_id`, `ip_override`, `user_agent`, `language`, `screen_resolution`, and ecommerce fields (`transaction_id`, `value`, `tax`, `shipping`, `discount`, `items`).
 
-Every event also carries:
+Matomo-specific fields:
 
 - `x-matomo-hit`: all hit parameters, decoded;
 - `x-matomo-idsite`: the Matomo site ID;
+- `x-matomo-consent`: `granted` when the hit carries a visitor ID (cookie consent given, `consent=1`, or a `mtm_cookie_consent` / `mtm_consent` cookie), otherwise `denied`. Use it in the triggers of your other tags (Google Ads, Meta…) so they respect the visitor's choice;
 - `x-matomo-request`: Referer, DNT, client hints (`sec-ch-ua*`) and the `matomo_ignore` cookie.
 
 ## Security
 
-`token_auth` is stripped from incoming hits. Use **Allowed origins** to restrict which sites can send hits.
+- `token_auth` is stripped from incoming hits.
+- Use **Allowed Matomo site IDs** and **Allowed origins** to restrict what can be sent through your container.
+- The opt-out proxy only relays the `optOutJS` action; no other Matomo page is exposed.
 
 ## License
 

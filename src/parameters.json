@@ -41,6 +41,37 @@
     "help": "Comma-separated list, e.g. https://www.example.com, https://shop.example.com. Leave empty to accept any origin."
   },
   {
+    "type": "TEXT",
+    "name": "allowedSiteIds",
+    "displayName": "Allowed Matomo site IDs",
+    "simpleValueType": true,
+    "help": "Comma-separated list, e.g. 1, 3. Hits for other site IDs are dropped, so nobody can use your server container to send data to other sites of your Matomo instance. Leave empty to accept any site."
+  },
+  {
+    "type": "CHECKBOX",
+    "name": "proxyMtm",
+    "checkboxText": "Proxy Matomo Tag Manager containers (/js/container_XXXX.js)",
+    "simpleValueType": true,
+    "defaultValue": false
+  },
+  {
+    "type": "TEXT",
+    "name": "mtmCacheMinutes",
+    "displayName": "Matomo Tag Manager container cache duration (minutes)",
+    "simpleValueType": true,
+    "defaultValue": "5",
+    "help": "Published containers are cached for this duration. Preview containers (_preview) are never cached.",
+    "valueValidators": [{ "type": "POSITIVE_NUMBER" }],
+    "enablingConditions": [{ "paramName": "proxyMtm", "paramValue": true, "type": "EQUALS" }]
+  },
+  {
+    "type": "CHECKBOX",
+    "name": "proxyOptOut",
+    "checkboxText": "Proxy the Matomo opt-out script (/index.php?module=CoreAdminHome&action=optOutJS)",
+    "simpleValueType": true,
+    "defaultValue": false
+  },
+  {
     "type": "CHECKBOX",
     "name": "proxyAbTesting",
     "checkboxText": "Proxy A/B Testing redirect experiments (/plugins/AbTesting/redirect.php)",

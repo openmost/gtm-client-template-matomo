@@ -47,7 +47,7 @@
       "key": { "publicId": "get_cookies", "versionId": "1" },
       "param": [
         { "key": "cookieAccess", "value": { "type": 1, "string": "specific" } },
-        { "key": "cookieNames", "value": { "type": 2, "listItem": [{ "type": 1, "string": "matomo_ignore" }] } }
+        { "key": "cookieNames", "value": { "type": 2, "listItem": [{ "type": 1, "string": "matomo_ignore" }, { "type": 1, "string": "mtm_cookie_consent" }, { "type": 1, "string": "mtm_consent" }] } }
       ]
     },
     "clientAnnotations": { "isEditedByUser": true },

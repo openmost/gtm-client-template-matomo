@@ -138,7 +138,7 @@ scenarios:
     assertApi('returnResponse').wasCalled();
 - name: hit without idsite is ignored
   code: |-
-    const events = runTracker('GET', 'rec=1&url=https%3A%2F%2Fx.fr%2F');
+    const events = runTracker('POST', 'rec=1&url=https%3A%2F%2Fx.fr%2F', '');
     assertThat(events.length).isEqualTo(0);
     assertApi('setResponseStatus').wasCalledWith(204);
 - name: GET with send image 1 returns a pixel
@@ -256,6 +256,108 @@ scenarios:
     mock('getRequestMethod', 'GET');
     runCode(mockData);
     assertApi('claimRequest').wasNotCalled();
+- name: serves Matomo Tag Manager container through cache when enabled
+  code: |-
+    let fetched;
+    let stored;
+    mock('getRequestPath', '/js/container_AbC123.js');
+    mock('getRequestMethod', 'GET');
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return undefined; },
+      setItemCopy: function (key, value) { stored = value; },
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb) { fetched = url; cb(200, { 'content-type': 'application/javascript' }, 'MTM'); });
+    runCode(withData({ proxyMtm: true }));
+    assertThat(fetched).isEqualTo('https://matomo.example.com/js/container_AbC123.js');
+    assertThat(stored.body).isEqualTo('MTM');
+    assertApi('setResponseBody').wasCalledWith('MTM');
+    assertApi('setResponseHeader').wasCalledWith('Cache-Control', 'public, max-age=300');
+- name: does not cache Matomo Tag Manager preview containers
+  code: |-
+    mock('getRequestPath', '/js/container_AbC123_preview.js');
+    mock('getRequestMethod', 'GET');
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return { body: 'STALE', ts: 0 }; },
+      setItemCopy: function () { fail('preview must not be cached'); },
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb) { cb(200, {}, 'PREVIEW'); });
+    runCode(withData({ proxyMtm: true }));
+    assertApi('setResponseBody').wasCalledWith('PREVIEW');
+    assertApi('setResponseHeader').wasCalledWith('Cache-Control', 'no-store');
+- name: ignores Matomo Tag Manager container requests when disabled or invalid
+  code: |-
+    mock('getRequestMethod', 'GET');
+    mock('getRequestPath', '/js/container_AbC123.js');
+    runCode(mockData);
+    mock('getRequestPath', '/js/container_../secret.js');
+    runCode(withData({ proxyMtm: true }));
+    mock('getRequestPath', '/js/container_.js');
+    runCode(withData({ proxyMtm: true }));
+    assertApi('claimRequest').wasNotCalled();
+- name: rejects a non JavaScript upstream body
+  code: |-
+    mock('getRequestPath', '/js/app.js');
+    mock('getRequestMethod', 'GET');
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return undefined; },
+      setItemCopy: function () { fail('HTML must not be cached'); },
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb) { cb(200, { 'content-type': 'text/html; charset=utf-8' }, '<html>maintenance</html>'); });
+    runCode(mockData);
+    assertApi('setResponseStatus').wasCalledWith(502);
+- name: proxies the opt out script when enabled
+  code: |-
+    let fetched;
+    mock('getRequestPath', '/index.php');
+    mock('getRequestMethod', 'GET');
+    mock('getRequestQueryString', 'module=CoreAdminHome&action=optOutJS&divId=matomo-opt-out&language=auto');
+    mock('sendHttpGet', function (url, cb) { fetched = url; cb(200, { 'content-type': 'application/javascript' }, 'OPTOUT'); });
+    runCode(withData({ proxyOptOut: true }));
+    assertThat(fetched).isEqualTo('https://matomo.example.com/index.php?module=CoreAdminHome&action=optOutJS&divId=matomo-opt-out&language=auto');
+    assertApi('setResponseBody').wasCalledWith('OPTOUT');
+    assertApi('setResponseHeader').wasCalledWith('Content-Type', 'application/javascript; charset=utf-8');
+- name: does not proxy other Matomo index actions
+  code: |-
+    mock('getRequestPath', '/index.php');
+    mock('getRequestMethod', 'GET');
+    mock('getRequestQueryString', 'module=Login&action=login');
+    runCode(withData({ proxyOptOut: true }));
+    mock('getRequestQueryString', 'module=CoreAdminHome&action=optOutJS');
+    runCode(mockData);
+    assertApi('claimRequest').wasNotCalled();
+- name: exposes the cookie consent state
+  code: |-
+    assertThat(runTracker('GET', 'idsite=1&rec=1&_id=0123456789abcdef')[0]['x-matomo-consent']).isEqualTo('granted');
+    assertThat(runTracker('GET', 'idsite=1&rec=1&_id=')[0]['x-matomo-consent']).isEqualTo('denied');
+    assertThat(runTracker('GET', 'idsite=1&rec=1&consent=1')[0]['x-matomo-consent']).isEqualTo('granted');
+    mock('getCookieValues', function (name) { return name === 'mtm_cookie_consent' ? ['1700000000'] : []; });
+    assertThat(runTracker('GET', 'idsite=1&rec=1')[0]['x-matomo-consent']).isEqualTo('granted');
+- name: drops hits for site IDs that are not allowed
+  code: |-
+    const body = '{"requests":["?idsite=1&rec=1","?idsite=2&rec=1","?idsite=3&rec=1"]}';
+    const events = runTracker('POST', '', body, { allowedSiteIds: '1, 3' });
+    assertThat(events.length).isEqualTo(2);
+    assertThat(events[1]['x-matomo-idsite']).isEqualTo('3');
+    assertApi('setResponseStatus').wasCalledWith(204);
+- name: GET hit without send image parameter returns a pixel
+  code: |-
+    runTracker('GET', 'idsite=1&rec=1');
+    assertApi('setPixelResponse').wasCalled();
+- name: AB testing proxy answers 502 when the instance fails
+  code: |-
+    mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    mock('getRequestMethod', 'GET');
+    mock('sendHttpGet', function (url, cb) { cb(0, undefined, ''); });
+    runCode(withData({ proxyAbTesting: true }));
+    assertApi('setResponseStatus').wasCalledWith(502);
+- name: ecommerce items with invalid rows are skipped
+  code: |-
+    const items = encodeUriComponent('[null,["SKU1","Shoe","",10,1]]');
+    const ev = runTracker('GET', 'idsite=1&rec=1&idgoal=0&ec_id=T1&revenue=10&ec_items=' + items)[0];
+    assertThat(ev.items).isEqualTo([{ item_id: 'SKU1', item_name: 'Shoe', price: 10, quantity: 1 }]);
 setup: |-
   const encodeUriComponent = require('encodeUriComponent');
   const Object = require('Object');
@@ -265,7 +367,11 @@ setup: |-
     trackerPath: '/collect',
     jsCacheHours: '12',
     allowedOrigins: '',
-    proxyAbTesting: false
+    proxyAbTesting: false,
+    allowedSiteIds: '',
+    proxyMtm: false,
+    mtmCacheMinutes: '5',
+    proxyOptOut: false
   };
   function withData(extra) {
     const d = {};

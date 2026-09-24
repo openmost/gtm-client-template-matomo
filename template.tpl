@@ -108,6 +108,47 @@ ___TEMPLATE_PARAMETERS___
     "help": "Comma-separated list, e.g. https://www.example.com, https://shop.example.com. Leave empty to accept any origin."
   },
   {
+    "type": "TEXT",
+    "name": "allowedSiteIds",
+    "displayName": "Allowed Matomo site IDs",
+    "simpleValueType": true,
+    "help": "Comma-separated list, e.g. 1, 3. Hits for other site IDs are dropped, so nobody can use your server container to send data to other sites of your Matomo instance. Leave empty to accept any site."
+  },
+  {
+    "type": "CHECKBOX",
+    "name": "proxyMtm",
+    "checkboxText": "Proxy Matomo Tag Manager containers (/js/container_XXXX.js)",
+    "simpleValueType": true,
+    "defaultValue": false
+  },
+  {
+    "type": "TEXT",
+    "name": "mtmCacheMinutes",
+    "displayName": "Matomo Tag Manager container cache duration (minutes)",
+    "simpleValueType": true,
+    "defaultValue": "5",
+    "help": "Published containers are cached for this duration. Preview containers (_preview) are never cached.",
+    "valueValidators": [
+      {
+        "type": "POSITIVE_NUMBER"
+      }
+    ],
+    "enablingConditions": [
+      {
+        "paramName": "proxyMtm",
+        "paramValue": true,
+        "type": "EQUALS"
+      }
+    ]
+  },
+  {
+    "type": "CHECKBOX",
+    "name": "proxyOptOut",
+    "checkboxText": "Proxy the Matomo opt-out script (/index.php?module=CoreAdminHome&action=optOutJS)",
+    "simpleValueType": true,
+    "defaultValue": false
+  },
+  {
     "type": "CHECKBOX",
     "name": "proxyAbTesting",
     "checkboxText": "Proxy A/B Testing redirect experiments (/plugins/AbTesting/redirect.php)",
@@ -150,6 +191,8 @@ const matomoUrl = stripTrailingSlash(data.matomoUrl);
 const jsPath = data.jsPath || '/matomo.js';
 const trackerPath = data.trackerPath || '/matomo.php';
 const jsCacheKey = 'openmost_matomo_js|' + matomoUrl;
+const MTM_PREFIX = '/js/container_';
+const ID_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_';
 
 function stripTrailingSlash(url) {
   let result = makeString(url || '');
@@ -195,31 +238,74 @@ function handlePreflight() {
   returnResponse();
 }
 
-function sendJs(body, ttlMs) {
+function sendJs(body, cacheControl) {
   setResponseStatus(200);
   setResponseHeader('Content-Type', 'application/javascript; charset=utf-8');
-  setResponseHeader('Cache-Control', 'public, max-age=' + makeString(ttlMs / 1000));
+  setResponseHeader('Cache-Control', cacheControl);
   setResponseBody(body);
   returnResponse();
 }
 
-function serveTrackerJs() {
-  const ttlMs = makeNumber(data.jsCacheHours || 12) * 3600000;
+// An HTML maintenance or error page must never be served (or cached) as JavaScript.
+function isJavaScriptResponse(statusCode, headers, body) {
+  if (!(statusCode >= 200 && statusCode < 300) || !body) return false;
+  const contentType = makeString((headers && headers['content-type']) || '').toLowerCase();
+  return contentType === '' || contentType.indexOf('javascript') !== -1;
+}
+
+// ttlMs = 0 disables caching (used for Matomo Tag Manager preview containers).
+function serveCachedJs(upstreamUrl, cacheKey, ttlMs) {
   const now = getTimestampMillis();
-  const cached = templateDataStorage.getItemCopy(jsCacheKey);
+  const cacheControl = ttlMs > 0 ? 'public, max-age=' + makeString(ttlMs / 1000) : 'no-store';
+  const cached = ttlMs > 0 ? templateDataStorage.getItemCopy(cacheKey) : undefined;
   if (cached && cached.body && now - cached.ts < ttlMs) {
-    sendJs(cached.body, ttlMs);
+    sendJs(cached.body, cacheControl);
     return;
   }
-  sendHttpGet(matomoUrl + '/matomo.js', function (statusCode, headers, body) {
-    if (statusCode >= 200 && statusCode < 300 && body) {
-      templateDataStorage.setItemCopy(jsCacheKey, { body: body, ts: now });
-      sendJs(body, ttlMs);
+  sendHttpGet(upstreamUrl, function (statusCode, headers, body) {
+    if (isJavaScriptResponse(statusCode, headers, body)) {
+      if (ttlMs > 0) templateDataStorage.setItemCopy(cacheKey, { body: body, ts: now });
+      sendJs(body, cacheControl);
     } else if (cached && cached.body) {
-      log('matomo.js fetch failed with status ' + statusCode + ', serving stale copy');
-      sendJs(cached.body, ttlMs);
+      log(upstreamUrl + ' failed with status ' + statusCode + ', serving stale copy');
+      sendJs(cached.body, cacheControl);
     } else {
-      log('matomo.js fetch failed with status ' + statusCode);
+      log(upstreamUrl + ' failed with status ' + statusCode);
+      setResponseStatus(502);
+      returnResponse();
+    }
+  }, { timeout: 5000 });
+}
+
+function serveTrackerJs() {
+  serveCachedJs(matomoUrl + '/matomo.js', jsCacheKey, makeNumber(data.jsCacheHours || 12) * 3600000);
+}
+
+// Returns the container ID of a Matomo Tag Manager path (/js/container_<id>.js), or undefined.
+function mtmContainerId(path) {
+  const p = makeString(path || '');
+  if (p.indexOf(MTM_PREFIX) !== 0 || p.substring(p.length - 3) !== '.js') return undefined;
+  const id = p.substring(MTM_PREFIX.length, p.length - 3);
+  const valid = id.length > 0 && id.split('').every(function (c) { return ID_CHARS.indexOf(c) !== -1; });
+  return valid ? id : undefined;
+}
+
+function serveMtmContainer(id) {
+  const isPreview = id.indexOf('_preview') !== -1;
+  const ttlMs = isPreview ? 0 : makeNumber(data.mtmCacheMinutes || 5) * 60000;
+  serveCachedJs(matomoUrl + MTM_PREFIX + id + '.js', 'openmost_matomo_mtm|' + matomoUrl + '|' + id, ttlMs);
+}
+
+function isOptOutRequest() {
+  const params = parseQuery(getRequestQueryString());
+  return hitValue(params, 'module') === 'CoreAdminHome' && hitValue(params, 'action') === 'optOutJS';
+}
+
+function proxyOptOut() {
+  sendHttpGet(matomoUrl + '/index.php?' + getRequestQueryString(), function (statusCode, headers, body) {
+    if (isJavaScriptResponse(statusCode, headers, body)) {
+      sendJs(body, 'public, max-age=3600');
+    } else {
       setResponseStatus(502);
       returnResponse();
     }
@@ -321,7 +407,7 @@ function parseItems(raw) {
   if (!raw) return undefined;
   const rows = JSON.parse(raw);
   if (getType(rows) !== 'array') return undefined;
-  return rows.map(function (row) {
+  return rows.filter(function (row) { return getType(row) === 'array'; }).map(function (row) {
     const item = { item_id: row[0], item_name: row[1] };
     const categories = getType(row[2]) === 'array' ? row[2] : (row[2] ? [row[2]] : []);
     setCategories(item, categories);
@@ -398,6 +484,21 @@ function requestContext() {
   return context;
 }
 
+// matomo.js sends an empty _id until cookie consent is given (requireCookieConsent / disableCookies).
+function consentState(hit) {
+  if (hitValue(hit, '_id') || hitValue(hit, 'consent') === '1') return 'granted';
+  const hasCookie = function (name) {
+    const values = getCookieValues(name);
+    return values && values.length > 0;
+  };
+  return hasCookie('mtm_cookie_consent') || hasCookie('mtm_consent') ? 'granted' : 'denied';
+}
+
+function isSiteAllowed(idsite) {
+  const allowed = splitList(data.allowedSiteIds);
+  return allowed.length === 0 || allowed.indexOf(makeString(idsite)) !== -1;
+}
+
 function buildEvent(hit) {
   const event = classifyHit(hit);
   event.page_location = hitValue(hit, 'url');
@@ -412,6 +513,7 @@ function buildEvent(hit) {
   event['x-matomo-hit'] = hit;
   event['x-matomo-idsite'] = hitValue(hit, 'idsite');
   event['x-matomo-request'] = requestContext();
+  event['x-matomo-consent'] = consentState(hit);
   return compact(event);
 }
 
@@ -422,11 +524,13 @@ function handleHits() {
     returnResponse();
     return;
   }
+  // Like matomo.php: a GET hit gets a GIF unless it explicitly asks for send_image=0.
   const wantsImage = getRequestMethod() === 'GET' &&
-    hitValue(parseQuery(getRequestQueryString()), 'send_image') === '1';
+    hitValue(parseQuery(getRequestQueryString()), 'send_image') !== '0';
   const hits = extractHits().filter(function (hit) {
     Object.delete(hit, 'token_auth');
-    return hitValue(hit, 'idsite') && !isHeatmapHit(hit);
+    const idsite = hitValue(hit, 'idsite');
+    return idsite && isSiteAllowed(idsite) && !isHeatmapHit(hit);
   });
   const respond = function () {
     setCorsHeaders(origin);
@@ -454,6 +558,11 @@ function handleHits() {
 function proxyAbTestingRedirect() {
   const qs = getRequestQueryString();
   sendHttpGet(matomoUrl + ABTESTING_PATH + (qs ? '?' + qs : ''), function (statusCode, headers) {
+    if (!(statusCode >= 200 && statusCode < 400)) {
+      setResponseStatus(502);
+      returnResponse();
+      return;
+    }
     setResponseStatus(statusCode);
     if (headers && headers.location) setResponseHeader('Location', headers.location);
     setResponseHeader('Cache-Control', 'no-store');
@@ -478,6 +587,12 @@ if (requestPath === jsPath && requestMethod === 'GET') {
 } else if (data.proxyAbTesting && requestPath === ABTESTING_PATH && requestMethod === 'GET') {
   claimRequest();
   proxyAbTestingRedirect();
+} else if (data.proxyMtm && requestMethod === 'GET' && mtmContainerId(requestPath)) {
+  claimRequest();
+  serveMtmContainer(mtmContainerId(requestPath));
+} else if (data.proxyOptOut && requestPath === '/index.php' && requestMethod === 'GET' && isOptOutRequest()) {
+  claimRequest();
+  proxyOptOut();
 }
 
 
@@ -620,6 +735,14 @@ ___SERVER_PERMISSIONS___
               {
                 "type": 1,
                 "string": "matomo_ignore"
+              },
+              {
+                "type": 1,
+                "string": "mtm_cookie_consent"
+              },
+              {
+                "type": 1,
+                "string": "mtm_consent"
               }
             ]
           }
@@ -807,7 +930,7 @@ scenarios:
     assertApi('returnResponse').wasCalled();
 - name: hit without idsite is ignored
   code: |-
-    const events = runTracker('GET', 'rec=1&url=https%3A%2F%2Fx.fr%2F');
+    const events = runTracker('POST', 'rec=1&url=https%3A%2F%2Fx.fr%2F', '');
     assertThat(events.length).isEqualTo(0);
     assertApi('setResponseStatus').wasCalledWith(204);
 - name: GET with send image 1 returns a pixel
@@ -925,6 +1048,108 @@ scenarios:
     mock('getRequestMethod', 'GET');
     runCode(mockData);
     assertApi('claimRequest').wasNotCalled();
+- name: serves Matomo Tag Manager container through cache when enabled
+  code: |-
+    let fetched;
+    let stored;
+    mock('getRequestPath', '/js/container_AbC123.js');
+    mock('getRequestMethod', 'GET');
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return undefined; },
+      setItemCopy: function (key, value) { stored = value; },
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb) { fetched = url; cb(200, { 'content-type': 'application/javascript' }, 'MTM'); });
+    runCode(withData({ proxyMtm: true }));
+    assertThat(fetched).isEqualTo('https://matomo.example.com/js/container_AbC123.js');
+    assertThat(stored.body).isEqualTo('MTM');
+    assertApi('setResponseBody').wasCalledWith('MTM');
+    assertApi('setResponseHeader').wasCalledWith('Cache-Control', 'public, max-age=300');
+- name: does not cache Matomo Tag Manager preview containers
+  code: |-
+    mock('getRequestPath', '/js/container_AbC123_preview.js');
+    mock('getRequestMethod', 'GET');
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return { body: 'STALE', ts: 0 }; },
+      setItemCopy: function () { fail('preview must not be cached'); },
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb) { cb(200, {}, 'PREVIEW'); });
+    runCode(withData({ proxyMtm: true }));
+    assertApi('setResponseBody').wasCalledWith('PREVIEW');
+    assertApi('setResponseHeader').wasCalledWith('Cache-Control', 'no-store');
+- name: ignores Matomo Tag Manager container requests when disabled or invalid
+  code: |-
+    mock('getRequestMethod', 'GET');
+    mock('getRequestPath', '/js/container_AbC123.js');
+    runCode(mockData);
+    mock('getRequestPath', '/js/container_../secret.js');
+    runCode(withData({ proxyMtm: true }));
+    mock('getRequestPath', '/js/container_.js');
+    runCode(withData({ proxyMtm: true }));
+    assertApi('claimRequest').wasNotCalled();
+- name: rejects a non JavaScript upstream body
+  code: |-
+    mock('getRequestPath', '/js/app.js');
+    mock('getRequestMethod', 'GET');
+    mockObject('templateDataStorage', {
+      getItemCopy: function () { return undefined; },
+      setItemCopy: function () { fail('HTML must not be cached'); },
+      removeItem: function () {}
+    });
+    mock('sendHttpGet', function (url, cb) { cb(200, { 'content-type': 'text/html; charset=utf-8' }, '<html>maintenance</html>'); });
+    runCode(mockData);
+    assertApi('setResponseStatus').wasCalledWith(502);
+- name: proxies the opt out script when enabled
+  code: |-
+    let fetched;
+    mock('getRequestPath', '/index.php');
+    mock('getRequestMethod', 'GET');
+    mock('getRequestQueryString', 'module=CoreAdminHome&action=optOutJS&divId=matomo-opt-out&language=auto');
+    mock('sendHttpGet', function (url, cb) { fetched = url; cb(200, { 'content-type': 'application/javascript' }, 'OPTOUT'); });
+    runCode(withData({ proxyOptOut: true }));
+    assertThat(fetched).isEqualTo('https://matomo.example.com/index.php?module=CoreAdminHome&action=optOutJS&divId=matomo-opt-out&language=auto');
+    assertApi('setResponseBody').wasCalledWith('OPTOUT');
+    assertApi('setResponseHeader').wasCalledWith('Content-Type', 'application/javascript; charset=utf-8');
+- name: does not proxy other Matomo index actions
+  code: |-
+    mock('getRequestPath', '/index.php');
+    mock('getRequestMethod', 'GET');
+    mock('getRequestQueryString', 'module=Login&action=login');
+    runCode(withData({ proxyOptOut: true }));
+    mock('getRequestQueryString', 'module=CoreAdminHome&action=optOutJS');
+    runCode(mockData);
+    assertApi('claimRequest').wasNotCalled();
+- name: exposes the cookie consent state
+  code: |-
+    assertThat(runTracker('GET', 'idsite=1&rec=1&_id=0123456789abcdef')[0]['x-matomo-consent']).isEqualTo('granted');
+    assertThat(runTracker('GET', 'idsite=1&rec=1&_id=')[0]['x-matomo-consent']).isEqualTo('denied');
+    assertThat(runTracker('GET', 'idsite=1&rec=1&consent=1')[0]['x-matomo-consent']).isEqualTo('granted');
+    mock('getCookieValues', function (name) { return name === 'mtm_cookie_consent' ? ['1700000000'] : []; });
+    assertThat(runTracker('GET', 'idsite=1&rec=1')[0]['x-matomo-consent']).isEqualTo('granted');
+- name: drops hits for site IDs that are not allowed
+  code: |-
+    const body = '{"requests":["?idsite=1&rec=1","?idsite=2&rec=1","?idsite=3&rec=1"]}';
+    const events = runTracker('POST', '', body, { allowedSiteIds: '1, 3' });
+    assertThat(events.length).isEqualTo(2);
+    assertThat(events[1]['x-matomo-idsite']).isEqualTo('3');
+    assertApi('setResponseStatus').wasCalledWith(204);
+- name: GET hit without send image parameter returns a pixel
+  code: |-
+    runTracker('GET', 'idsite=1&rec=1');
+    assertApi('setPixelResponse').wasCalled();
+- name: AB testing proxy answers 502 when the instance fails
+  code: |-
+    mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    mock('getRequestMethod', 'GET');
+    mock('sendHttpGet', function (url, cb) { cb(0, undefined, ''); });
+    runCode(withData({ proxyAbTesting: true }));
+    assertApi('setResponseStatus').wasCalledWith(502);
+- name: ecommerce items with invalid rows are skipped
+  code: |-
+    const items = encodeUriComponent('[null,["SKU1","Shoe","",10,1]]');
+    const ev = runTracker('GET', 'idsite=1&rec=1&idgoal=0&ec_id=T1&revenue=10&ec_items=' + items)[0];
+    assertThat(ev.items).isEqualTo([{ item_id: 'SKU1', item_name: 'Shoe', price: 10, quantity: 1 }]);
 setup: |-
   const encodeUriComponent = require('encodeUriComponent');
   const Object = require('Object');
@@ -934,7 +1159,11 @@ setup: |-
     trackerPath: '/collect',
     jsCacheHours: '12',
     allowedOrigins: '',
-    proxyAbTesting: false
+    proxyAbTesting: false,
+    allowedSiteIds: '',
+    proxyMtm: false,
+    mtmCacheMinutes: '5',
+    proxyOptOut: false
   };
   function withData(extra) {
     const d = {};

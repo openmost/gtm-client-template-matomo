@@ -29,6 +29,8 @@ const matomoUrl = stripTrailingSlash(data.matomoUrl);
 const jsPath = data.jsPath || '/matomo.js';
 const trackerPath = data.trackerPath || '/matomo.php';
 const jsCacheKey = 'openmost_matomo_js|' + matomoUrl;
+const MTM_PREFIX = '/js/container_';
+const ID_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_';
 
 function stripTrailingSlash(url) {
   let result = makeString(url || '');
@@ -74,31 +76,74 @@ function handlePreflight() {
   returnResponse();
 }
 
-function sendJs(body, ttlMs) {
+function sendJs(body, cacheControl) {
   setResponseStatus(200);
   setResponseHeader('Content-Type', 'application/javascript; charset=utf-8');
-  setResponseHeader('Cache-Control', 'public, max-age=' + makeString(ttlMs / 1000));
+  setResponseHeader('Cache-Control', cacheControl);
   setResponseBody(body);
   returnResponse();
 }
 
-function serveTrackerJs() {
-  const ttlMs = makeNumber(data.jsCacheHours || 12) * 3600000;
+// An HTML maintenance or error page must never be served (or cached) as JavaScript.
+function isJavaScriptResponse(statusCode, headers, body) {
+  if (!(statusCode >= 200 && statusCode < 300) || !body) return false;
+  const contentType = makeString((headers && headers['content-type']) || '').toLowerCase();
+  return contentType === '' || contentType.indexOf('javascript') !== -1;
+}
+
+// ttlMs = 0 disables caching (used for Matomo Tag Manager preview containers).
+function serveCachedJs(upstreamUrl, cacheKey, ttlMs) {
   const now = getTimestampMillis();
-  const cached = templateDataStorage.getItemCopy(jsCacheKey);
+  const cacheControl = ttlMs > 0 ? 'public, max-age=' + makeString(ttlMs / 1000) : 'no-store';
+  const cached = ttlMs > 0 ? templateDataStorage.getItemCopy(cacheKey) : undefined;
   if (cached && cached.body && now - cached.ts < ttlMs) {
-    sendJs(cached.body, ttlMs);
+    sendJs(cached.body, cacheControl);
     return;
   }
-  sendHttpGet(matomoUrl + '/matomo.js', function (statusCode, headers, body) {
-    if (statusCode >= 200 && statusCode < 300 && body) {
-      templateDataStorage.setItemCopy(jsCacheKey, { body: body, ts: now });
-      sendJs(body, ttlMs);
+  sendHttpGet(upstreamUrl, function (statusCode, headers, body) {
+    if (isJavaScriptResponse(statusCode, headers, body)) {
+      if (ttlMs > 0) templateDataStorage.setItemCopy(cacheKey, { body: body, ts: now });
+      sendJs(body, cacheControl);
     } else if (cached && cached.body) {
-      log('matomo.js fetch failed with status ' + statusCode + ', serving stale copy');
-      sendJs(cached.body, ttlMs);
+      log(upstreamUrl + ' failed with status ' + statusCode + ', serving stale copy');
+      sendJs(cached.body, cacheControl);
     } else {
-      log('matomo.js fetch failed with status ' + statusCode);
+      log(upstreamUrl + ' failed with status ' + statusCode);
+      setResponseStatus(502);
+      returnResponse();
+    }
+  }, { timeout: 5000 });
+}
+
+function serveTrackerJs() {
+  serveCachedJs(matomoUrl + '/matomo.js', jsCacheKey, makeNumber(data.jsCacheHours || 12) * 3600000);
+}
+
+// Returns the container ID of a Matomo Tag Manager path (/js/container_<id>.js), or undefined.
+function mtmContainerId(path) {
+  const p = makeString(path || '');
+  if (p.indexOf(MTM_PREFIX) !== 0 || p.substring(p.length - 3) !== '.js') return undefined;
+  const id = p.substring(MTM_PREFIX.length, p.length - 3);
+  const valid = id.length > 0 && id.split('').every(function (c) { return ID_CHARS.indexOf(c) !== -1; });
+  return valid ? id : undefined;
+}
+
+function serveMtmContainer(id) {
+  const isPreview = id.indexOf('_preview') !== -1;
+  const ttlMs = isPreview ? 0 : makeNumber(data.mtmCacheMinutes || 5) * 60000;
+  serveCachedJs(matomoUrl + MTM_PREFIX + id + '.js', 'openmost_matomo_mtm|' + matomoUrl + '|' + id, ttlMs);
+}
+
+function isOptOutRequest() {
+  const params = parseQuery(getRequestQueryString());
+  return hitValue(params, 'module') === 'CoreAdminHome' && hitValue(params, 'action') === 'optOutJS';
+}
+
+function proxyOptOut() {
+  sendHttpGet(matomoUrl + '/index.php?' + getRequestQueryString(), function (statusCode, headers, body) {
+    if (isJavaScriptResponse(statusCode, headers, body)) {
+      sendJs(body, 'public, max-age=3600');
+    } else {
       setResponseStatus(502);
       returnResponse();
     }
@@ -200,7 +245,7 @@ function parseItems(raw) {
   if (!raw) return undefined;
   const rows = JSON.parse(raw);
   if (getType(rows) !== 'array') return undefined;
-  return rows.map(function (row) {
+  return rows.filter(function (row) { return getType(row) === 'array'; }).map(function (row) {
     const item = { item_id: row[0], item_name: row[1] };
     const categories = getType(row[2]) === 'array' ? row[2] : (row[2] ? [row[2]] : []);
     setCategories(item, categories);
@@ -277,6 +322,21 @@ function requestContext() {
   return context;
 }
 
+// matomo.js sends an empty _id until cookie consent is given (requireCookieConsent / disableCookies).
+function consentState(hit) {
+  if (hitValue(hit, '_id') || hitValue(hit, 'consent') === '1') return 'granted';
+  const hasCookie = function (name) {
+    const values = getCookieValues(name);
+    return values && values.length > 0;
+  };
+  return hasCookie('mtm_cookie_consent') || hasCookie('mtm_consent') ? 'granted' : 'denied';
+}
+
+function isSiteAllowed(idsite) {
+  const allowed = splitList(data.allowedSiteIds);
+  return allowed.length === 0 || allowed.indexOf(makeString(idsite)) !== -1;
+}
+
 function buildEvent(hit) {
   const event = classifyHit(hit);
   event.page_location = hitValue(hit, 'url');
@@ -291,6 +351,7 @@ function buildEvent(hit) {
   event['x-matomo-hit'] = hit;
   event['x-matomo-idsite'] = hitValue(hit, 'idsite');
   event['x-matomo-request'] = requestContext();
+  event['x-matomo-consent'] = consentState(hit);
   return compact(event);
 }
 
@@ -301,11 +362,13 @@ function handleHits() {
     returnResponse();
     return;
   }
+  // Like matomo.php: a GET hit gets a GIF unless it explicitly asks for send_image=0.
   const wantsImage = getRequestMethod() === 'GET' &&
-    hitValue(parseQuery(getRequestQueryString()), 'send_image') === '1';
+    hitValue(parseQuery(getRequestQueryString()), 'send_image') !== '0';
   const hits = extractHits().filter(function (hit) {
     Object.delete(hit, 'token_auth');
-    return hitValue(hit, 'idsite') && !isHeatmapHit(hit);
+    const idsite = hitValue(hit, 'idsite');
+    return idsite && isSiteAllowed(idsite) && !isHeatmapHit(hit);
   });
   const respond = function () {
     setCorsHeaders(origin);
@@ -333,6 +396,11 @@ function handleHits() {
 function proxyAbTestingRedirect() {
   const qs = getRequestQueryString();
   sendHttpGet(matomoUrl + ABTESTING_PATH + (qs ? '?' + qs : ''), function (statusCode, headers) {
+    if (!(statusCode >= 200 && statusCode < 400)) {
+      setResponseStatus(502);
+      returnResponse();
+      return;
+    }
     setResponseStatus(statusCode);
     if (headers && headers.location) setResponseHeader('Location', headers.location);
     setResponseHeader('Cache-Control', 'no-store');
@@ -357,4 +425,10 @@ if (requestPath === jsPath && requestMethod === 'GET') {
 } else if (data.proxyAbTesting && requestPath === ABTESTING_PATH && requestMethod === 'GET') {
   claimRequest();
   proxyAbTestingRedirect();
+} else if (data.proxyMtm && requestMethod === 'GET' && mtmContainerId(requestPath)) {
+  claimRequest();
+  serveMtmContainer(mtmContainerId(requestPath));
+} else if (data.proxyOptOut && requestPath === '/index.php' && requestMethod === 'GET' && isOptOutRequest()) {
+  claimRequest();
+  proxyOptOut();
 }
