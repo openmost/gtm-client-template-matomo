@@ -462,7 +462,7 @@ function classifyHit(hit) {
   if (idgoal === '0') return { event_name: 'update_cart', value: toNumber(v('revenue')), items: parseItems(v('ec_items')) };
   if (idgoal) return { event_name: 'matomo_goal', goal_id: idgoal, value: toNumber(v('revenue')) };
   if (v('search') !== undefined) {
-    return { event_name: 'view_search_results', search_term: v('search'), search_category: v('search_cat'), search_count: toNumber(v('search_count')) };
+    return { event_name: 'view_search_results', search_term: v('search'), search_category: v('search_cat'), search_total: toNumber(v('search_count')) };
   }
   if (v('e_c') !== undefined) {
     if (makeString(v('e_c')).toLowerCase() === 'abtesting') {
@@ -1044,7 +1044,7 @@ scenarios:
     const ev = runTracker('GET', 'idsite=1&rec=1&search=shoes&search_cat=cat&search_count=12')[0];
     assertThat(ev.search_term).isEqualTo('shoes');
     assertThat(ev.search_category).isEqualTo('cat');
-    assertThat(ev.search_count).isEqualTo(12);
+    assertThat(ev.search_total).isEqualTo(12);
 - name: omits keys that have no value
   code: |-
     const ev = runTracker('GET', 'idsite=1&rec=1')[0];
