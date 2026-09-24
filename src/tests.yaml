@@ -139,6 +139,88 @@ scenarios:
     const events = runTracker('POST', 'idsite=1&rec=1', '', { allowedOrigins: 'https://www.example.com' });
     assertThat(events.length).isEqualTo(0);
     assertApi('setResponseStatus').wasCalledWith(403);
+- name: maps common pageview fields
+  code: |-
+    mock('getRemoteAddress', '203.0.113.9');
+    const ev = runTracker('GET', 'idsite=3&rec=1&url=https%3A%2F%2Fwww.example.com%2Fp&action_name=Page&urlref=https%3A%2F%2Fgoogle.com%2F&_id=0123456789abcdef&uid=u42&res=1920x1080&lang=fr-FR&ua=UA-X')[0];
+    assertThat(ev.event_name).isEqualTo('page_view');
+    assertThat(ev.page_location).isEqualTo('https://www.example.com/p');
+    assertThat(ev.page_title).isEqualTo('Page');
+    assertThat(ev.page_referrer).isEqualTo('https://google.com/');
+    assertThat(ev.client_id).isEqualTo('0123456789abcdef');
+    assertThat(ev.user_id).isEqualTo('u42');
+    assertThat(ev.ip_override).isEqualTo('203.0.113.9');
+    assertThat(ev.user_agent).isEqualTo('UA-X');
+    assertThat(ev.language).isEqualTo('fr-FR');
+    assertThat(ev.screen_resolution).isEqualTo('1920x1080');
+    assertThat(ev['x-matomo-idsite']).isEqualTo('3');
+- name: user agent and language fall back to request headers
+  code: |-
+    mock('getRequestHeader', headers({ 'user-agent': 'Mozilla/5.0', 'accept-language': 'fr-FR,fr;q=0.9,en;q=0.8' }));
+    const ev = runTracker('GET', 'idsite=1&rec=1')[0];
+    assertThat(ev.user_agent).isEqualTo('Mozilla/5.0');
+    assertThat(ev.language).isEqualTo('fr-FR');
+    assertThat(ev.client_id).isEqualTo('');
+- name: collects request context headers and ignore cookie
+  code: |-
+    mock('getRequestHeader', headers({ referer: 'https://www.example.com/p', dnt: '1', 'sec-ch-ua': '"Chromium";v="128"' }));
+    mock('getCookieValues', function (name) { return name === 'matomo_ignore' ? ['*'] : []; });
+    const ev = runTracker('GET', 'idsite=1&rec=1')[0];
+    assertThat(ev['x-matomo-request']).isEqualTo({ referer: 'https://www.example.com/p', dnt: '1', 'sec-ch-ua': '"Chromium";v="128"', ignore_cookie: '*' });
+- name: maps every hit type to its event_name
+  code: |-
+    const cases = [
+      ['fa_id=f1&fa_ef=1', 'matomo_form'],
+      ['ma_id=m1&ma_mt=video', 'matomo_media'],
+      ['cra=Error&cra_st=x', 'matomo_crash'],
+      ['ping=1', 'matomo_ping'],
+      ['idgoal=0&ec_id=T1&revenue=10', 'purchase'],
+      ['idgoal=0&revenue=10', 'update_cart'],
+      ['idgoal=4', 'matomo_goal'],
+      ['search=shoes&search_cat=cat&search_count=12', 'view_search_results'],
+      ['e_c=abtesting&e_a=exp1&e_n=original', 'matomo_abtesting'],
+      ['e_c=Video&e_a=Play&e_n=intro&e_v=3', 'matomo_event'],
+      ['c_n=Banner&c_p=img.png&c_t=%2Fpromo', 'matomo_content'],
+      ['download=https%3A%2F%2Fx.fr%2Ff.pdf', 'file_download'],
+      ['link=https%3A%2F%2Fother.com%2F', 'click'],
+      ['_pks=SKU1&_pkn=Shoe&_pkc=Shoes&_pkp=59.9', 'page_view'],
+      ['action_name=Home', 'page_view']
+    ];
+    cases.forEach(function (c) {
+      assertThat(runTracker('GET', 'idsite=1&rec=1&' + c[0])[0].event_name, c[0]).isEqualTo(c[1]);
+    });
+- name: maps ecommerce order fields and items
+  code: |-
+    const items = encodeUriComponent('[["SKU1","Shoe",["Shoes","Men"],59.95,2]]');
+    const ev = runTracker('GET', 'idsite=1&rec=1&idgoal=0&ec_id=T1&revenue=129.9&ec_tx=20&ec_sh=10&ec_dt=5&ec_items=' + items)[0];
+    assertThat(ev.transaction_id).isEqualTo('T1');
+    assertThat(ev.value).isEqualTo(129.9);
+    assertThat(ev.tax).isEqualTo(20);
+    assertThat(ev.shipping).isEqualTo(10);
+    assertThat(ev.discount).isEqualTo(5);
+    assertThat(ev.items).isEqualTo([{ item_id: 'SKU1', item_name: 'Shoe', item_category: 'Shoes', item_category2: 'Men', price: 59.95, quantity: 2 }]);
+- name: maps event fields
+  code: |-
+    const ev = runTracker('GET', 'idsite=1&rec=1&e_c=Video&e_a=Play&e_n=intro&e_v=3')[0];
+    assertThat(ev.event_category).isEqualTo('Video');
+    assertThat(ev.event_action).isEqualTo('Play');
+    assertThat(ev.event_label).isEqualTo('intro');
+    assertThat(ev.value).isEqualTo(3);
+- name: maps product view to items
+  code: |-
+    const ev = runTracker('GET', 'idsite=1&rec=1&_pks=SKU1&_pkn=Shoe&_pkc=' + encodeUriComponent('["Shoes","Men"]') + '&_pkp=59.9')[0];
+    assertThat(ev.items).isEqualTo([{ item_id: 'SKU1', item_name: 'Shoe', item_category: 'Shoes', item_category2: 'Men', price: 59.9 }]);
+- name: maps site search fields
+  code: |-
+    const ev = runTracker('GET', 'idsite=1&rec=1&search=shoes&search_cat=cat&search_count=12')[0];
+    assertThat(ev.search_term).isEqualTo('shoes');
+    assertThat(ev.search_category).isEqualTo('cat');
+    assertThat(ev.search_count).isEqualTo(12);
+- name: omits keys that have no value
+  code: |-
+    const ev = runTracker('GET', 'idsite=1&rec=1')[0];
+    assertThat(Object.keys(ev).indexOf('user_id')).isEqualTo(-1);
+    assertThat(Object.keys(ev).indexOf('page_title')).isEqualTo(-1);
 setup: |-
   const encodeUriComponent = require('encodeUriComponent');
   const Object = require('Object');

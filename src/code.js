@@ -166,12 +166,132 @@ function isHeatmapHit(hit) {
   return Object.keys(hit).some(function (k) { return k.indexOf('hsr_') === 0; });
 }
 
+const REQUEST_CONTEXT_HEADERS = [
+  'referer', 'dnt', 'x-do-not-track',
+  'sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'sec-ch-ua-platform-version',
+  'sec-ch-ua-full-version-list', 'sec-ch-ua-model', 'sec-ch-ua-arch', 'sec-ch-ua-bitness'
+];
+
+function toNumber(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = makeNumber(value);
+  return n === n ? n : undefined;
+}
+
+function hasKeyPrefix(hit, prefix) {
+  return Object.keys(hit).some(function (k) { return k.indexOf(prefix) === 0; });
+}
+
+function compact(obj) {
+  const out = {};
+  Object.keys(obj).forEach(function (k) {
+    if (obj[k] !== undefined) out[k] = obj[k];
+  });
+  return out;
+}
+
+function setCategories(item, categories) {
+  categories.slice(0, 5).forEach(function (category, i) {
+    item[i === 0 ? 'item_category' : 'item_category' + (i + 1)] = category;
+  });
+}
+
+function parseItems(raw) {
+  if (!raw) return undefined;
+  const rows = JSON.parse(raw);
+  if (getType(rows) !== 'array') return undefined;
+  return rows.map(function (row) {
+    const item = { item_id: row[0], item_name: row[1] };
+    const categories = getType(row[2]) === 'array' ? row[2] : (row[2] ? [row[2]] : []);
+    setCategories(item, categories);
+    if (row[3] !== undefined) item.price = toNumber(row[3]);
+    if (row[4] !== undefined) item.quantity = toNumber(row[4]);
+    return compact(item);
+  });
+}
+
+function productViewItems(hit) {
+  const rawCategory = hitValue(hit, '_pkc');
+  let categories = [];
+  if (rawCategory) {
+    const parsed = rawCategory.charAt(0) === '[' ? JSON.parse(rawCategory) : undefined;
+    categories = getType(parsed) === 'array' ? parsed : [rawCategory];
+  }
+  const item = { item_id: hitValue(hit, '_pks'), item_name: hitValue(hit, '_pkn') };
+  setCategories(item, categories);
+  item.price = toNumber(hitValue(hit, '_pkp'));
+  return [compact(item)];
+}
+
+function classifyHit(hit) {
+  const v = function (key) { return hitValue(hit, key); };
+  if (hasKeyPrefix(hit, 'fa_')) return { event_name: 'matomo_form' };
+  if (hasKeyPrefix(hit, 'ma_')) return { event_name: 'matomo_media' };
+  if (v('cra') !== undefined) return { event_name: 'matomo_crash' };
+  if (v('ping') === '1') return { event_name: 'matomo_ping' };
+  const idgoal = v('idgoal');
+  if (idgoal === '0' && v('ec_id')) {
+    return {
+      event_name: 'purchase',
+      transaction_id: v('ec_id'),
+      value: toNumber(v('revenue')),
+      tax: toNumber(v('ec_tx')),
+      shipping: toNumber(v('ec_sh')),
+      discount: toNumber(v('ec_dt')),
+      items: parseItems(v('ec_items'))
+    };
+  }
+  if (idgoal === '0') return { event_name: 'update_cart', value: toNumber(v('revenue')), items: parseItems(v('ec_items')) };
+  if (idgoal) return { event_name: 'matomo_goal', goal_id: idgoal, value: toNumber(v('revenue')) };
+  if (v('search') !== undefined) {
+    return { event_name: 'view_search_results', search_term: v('search'), search_category: v('search_cat'), search_count: toNumber(v('search_count')) };
+  }
+  if (v('e_c') !== undefined) {
+    if (makeString(v('e_c')).toLowerCase() === 'abtesting') {
+      return { event_name: 'matomo_abtesting', experiment: v('e_a'), variation: v('e_n') };
+    }
+    return { event_name: 'matomo_event', event_category: v('e_c'), event_action: v('e_a'), event_label: v('e_n'), value: toNumber(v('e_v')) };
+  }
+  if (v('c_n') !== undefined) {
+    return { event_name: 'matomo_content', content_name: v('c_n'), content_piece: v('c_p'), content_target: v('c_t'), content_interaction: v('c_i') };
+  }
+  if (v('download') !== undefined) return { event_name: 'file_download', link_url: v('download') };
+  if (v('link') !== undefined) return { event_name: 'click', link_url: v('link'), outbound: true };
+  if (v('_pks') !== undefined || v('_pkc') !== undefined) return { event_name: 'page_view', items: productViewItems(hit) };
+  return { event_name: 'page_view' };
+}
+
+function firstLanguage(header) {
+  if (!header) return undefined;
+  return makeString(header).split(',')[0].split(';')[0].trim();
+}
+
+function requestContext() {
+  const context = {};
+  REQUEST_CONTEXT_HEADERS.forEach(function (name) {
+    const value = getRequestHeader(name);
+    if (value) context[name] = value;
+  });
+  const ignore = getCookieValues('matomo_ignore');
+  if (ignore && ignore.length) context.ignore_cookie = ignore[0];
+  return context;
+}
+
 function buildEvent(hit) {
-  return {
-    event_name: 'page_view',
-    'x-matomo-hit': hit,
-    'x-matomo-idsite': hitValue(hit, 'idsite')
-  };
+  const event = classifyHit(hit);
+  event.page_location = hitValue(hit, 'url');
+  event.page_title = hitValue(hit, 'action_name');
+  event.page_referrer = hitValue(hit, 'urlref');
+  event.client_id = hitValue(hit, '_id') || '';
+  event.user_id = hitValue(hit, 'uid');
+  event.ip_override = getRemoteAddress();
+  event.user_agent = hitValue(hit, 'ua') || getRequestHeader('user-agent');
+  event.language = hitValue(hit, 'lang') || firstLanguage(getRequestHeader('accept-language'));
+  event.screen_resolution = hitValue(hit, 'res');
+  event['x-matomo-hit'] = hit;
+  event['x-matomo-idsite'] = hitValue(hit, 'idsite');
+  event['x-matomo-request'] = requestContext();
+  return compact(event);
 }
 
 function handleHits() {
