@@ -105,10 +105,10 @@ function serveCachedJs(upstreamUrl, cacheKey, ttlMs) {
       if (ttlMs > 0) templateDataStorage.setItemCopy(cacheKey, { body: body, ts: now });
       sendJs(body, cacheControl);
     } else if (cached && cached.body) {
-      log(upstreamUrl + ' failed with status ' + statusCode + ', serving stale copy');
+      log(upstreamUrl + ' did not return JavaScript (status ' + statusCode + '), serving stale copy');
       sendJs(cached.body, cacheControl);
     } else {
-      log(upstreamUrl + ' failed with status ' + statusCode);
+      log(upstreamUrl + ' did not return JavaScript (status ' + statusCode + ', content-type ' + makeString((headers && headers['content-type']) || 'none') + ')');
       setResponseStatus(502);
       returnResponse();
     }
