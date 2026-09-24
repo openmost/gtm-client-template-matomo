@@ -307,7 +307,6 @@ function handleHits() {
     Object.delete(hit, 'token_auth');
     return hitValue(hit, 'idsite') && !isHeatmapHit(hit);
   });
-  let pending = hits.length;
   const respond = function () {
     setCorsHeaders(origin);
     setResponseHeader('Cache-Control', 'no-store');
@@ -318,16 +317,17 @@ function handleHits() {
     }
     returnResponse();
   };
-  if (pending === 0) {
-    respond();
-    return;
-  }
-  hits.forEach(function (hit) {
-    runContainer(buildEvent(hit), function () {
-      pending = pending - 1;
-      if (pending === 0) respond();
+  // Hits run one after another: Matomo must see them in order to attach them to the same visit.
+  const runNext = function (index) {
+    if (index >= hits.length) {
+      respond();
+      return;
+    }
+    runContainer(buildEvent(hits[index]), function () {
+      runNext(index + 1);
     });
-  });
+  };
+  runNext(0);
 }
 
 function proxyAbTestingRedirect() {

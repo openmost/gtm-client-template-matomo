@@ -428,7 +428,6 @@ function handleHits() {
     Object.delete(hit, 'token_auth');
     return hitValue(hit, 'idsite') && !isHeatmapHit(hit);
   });
-  let pending = hits.length;
   const respond = function () {
     setCorsHeaders(origin);
     setResponseHeader('Cache-Control', 'no-store');
@@ -439,16 +438,17 @@ function handleHits() {
     }
     returnResponse();
   };
-  if (pending === 0) {
-    respond();
-    return;
-  }
-  hits.forEach(function (hit) {
-    runContainer(buildEvent(hit), function () {
-      pending = pending - 1;
-      if (pending === 0) respond();
+  // Hits run one after another: Matomo must see them in order to attach them to the same visit.
+  const runNext = function (index) {
+    if (index >= hits.length) {
+      respond();
+      return;
+    }
+    runContainer(buildEvent(hits[index]), function () {
+      runNext(index + 1);
     });
-  });
+  };
+  runNext(0);
 }
 
 function proxyAbTestingRedirect() {
@@ -676,6 +676,7 @@ scenarios:
 - name: serves tracker JS from fresh cache
   code: |-
     mock('getRequestPath', '/js/app.js');
+    mock('getRequestMethod', 'GET');
     mock('getTimestampMillis', 1000000);
     mockObject('templateDataStorage', {
       getItemCopy: function () { return { body: 'CACHED', ts: 999000 }; },
@@ -695,6 +696,7 @@ scenarios:
     let fetchedUrl;
     let stored;
     mock('getRequestPath', '/js/app.js');
+    mock('getRequestMethod', 'GET');
     mock('getTimestampMillis', 50000000);
     mockObject('templateDataStorage', {
       getItemCopy: function () { return { body: 'OLD', ts: 0 }; },
@@ -709,6 +711,7 @@ scenarios:
 - name: serves stale tracker JS when instance fails
   code: |-
     mock('getRequestPath', '/js/app.js');
+    mock('getRequestMethod', 'GET');
     mock('getTimestampMillis', 50000000);
     mockObject('templateDataStorage', {
       getItemCopy: function () { return { body: 'OLD', ts: 0 }; },
@@ -721,6 +724,7 @@ scenarios:
 - name: returns 502 when no tracker JS is available
   code: |-
     mock('getRequestPath', '/js/app.js');
+    mock('getRequestMethod', 'GET');
     mock('sendHttpGet', function (url, cb) { cb(503, {}, ''); });
     runCode(mockData);
     assertApi('setResponseStatus').wasCalledWith(502);
@@ -773,6 +777,20 @@ scenarios:
     assertThat(events[2]['x-matomo-hit'].e_c).isEqualTo('c');
     assertThat(responses).isEqualTo(1);
     assertApi('setResponseStatus').wasCalledWith(204);
+- name: bulk hits run the container one after another
+  code: |-
+    const callbacks = [];
+    mock('getRequestPath', '/collect');
+    mock('getRequestMethod', 'POST');
+    mock('getRequestBody', '{"requests":["?idsite=1&rec=1&e_c=a","?idsite=1&rec=1&e_c=b"]}');
+    mock('runContainer', function (event, onComplete) { callbacks.push(onComplete); });
+    runCode(mockData);
+    assertThat(callbacks.length).isEqualTo(1);
+    callbacks[0]();
+    assertThat(callbacks.length).isEqualTo(2);
+    assertApi('returnResponse').wasNotCalled();
+    callbacks[1]();
+    assertApi('returnResponse').wasCalled();
 - name: token auth sent by a browser is stripped
   code: |-
     const events = runTracker('GET', 'idsite=1&rec=1&token_auth=secret');
@@ -894,6 +912,7 @@ scenarios:
   code: |-
     let requested;
     mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    mock('getRequestMethod', 'GET');
     mock('getRequestQueryString', 'id=3');
     mock('sendHttpGet', function (url, cb) { requested = url; cb(302, { location: 'https://www.example.com/variant' }, ''); });
     runCode(withData({ proxyAbTesting: true }));
@@ -903,6 +922,7 @@ scenarios:
 - name: does not claim AB testing redirect when disabled
   code: |-
     mock('getRequestPath', '/plugins/AbTesting/redirect.php');
+    mock('getRequestMethod', 'GET');
     runCode(mockData);
     assertApi('claimRequest').wasNotCalled();
 setup: |-
