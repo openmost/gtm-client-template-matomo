@@ -795,7 +795,7 @@ scenarios:
   code: |-
     mock('getRequestPath', '/other');
     runCode(mockData);
-    assertApi('claimRequest').wasNotCalled();
+    assertThat(claimed).isFalse();
 - name: serves tracker JS from fresh cache
   code: |-
     mock('getRequestPath', '/js/app.js');
@@ -807,7 +807,7 @@ scenarios:
       removeItem: function () {}
     });
     runCode(mockData);
-    assertApi('claimRequest').wasCalled();
+    assertThat(claimed).isTrue();
     assertApi('sendHttpGet').wasNotCalled();
     assertApi('setResponseStatus').wasCalledWith(200);
     assertApi('setResponseHeader').wasCalledWith('Content-Type', 'application/javascript; charset=utf-8');
@@ -1047,7 +1047,7 @@ scenarios:
     mock('getRequestPath', '/plugins/AbTesting/redirect.php');
     mock('getRequestMethod', 'GET');
     runCode(mockData);
-    assertApi('claimRequest').wasNotCalled();
+    assertThat(claimed).isFalse();
 - name: serves Matomo Tag Manager container through cache when enabled
   code: |-
     let fetched;
@@ -1087,7 +1087,7 @@ scenarios:
     runCode(withData({ proxyMtm: true }));
     mock('getRequestPath', '/js/container_.js');
     runCode(withData({ proxyMtm: true }));
-    assertApi('claimRequest').wasNotCalled();
+    assertThat(claimed).isFalse();
 - name: rejects a non JavaScript upstream body
   code: |-
     mock('getRequestPath', '/js/app.js');
@@ -1119,7 +1119,7 @@ scenarios:
     runCode(withData({ proxyOptOut: true }));
     mock('getRequestQueryString', 'module=CoreAdminHome&action=optOutJS');
     runCode(mockData);
-    assertApi('claimRequest').wasNotCalled();
+    assertThat(claimed).isFalse();
 - name: exposes the cookie consent state
   code: |-
     assertThat(runTracker('GET', 'idsite=1&rec=1&_id=0123456789abcdef')[0]['x-matomo-consent']).isEqualTo('granted');
@@ -1151,6 +1151,9 @@ scenarios:
     const ev = runTracker('GET', 'idsite=1&rec=1&idgoal=0&ec_id=T1&revenue=10&ec_items=' + items)[0];
     assertThat(ev.items).isEqualTo([{ item_id: 'SKU1', item_name: 'Shoe', price: 10, quantity: 1 }]);
 setup: |-
+  // GTM's test runner fails on the real claimRequest when all scenarios run together, so it is mocked.
+  let claimed = false;
+  mock('claimRequest', function () { claimed = true; });
   const encodeUriComponent = require('encodeUriComponent');
   const Object = require('Object');
   const mockData = {
