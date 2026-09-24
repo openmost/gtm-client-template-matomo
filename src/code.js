@@ -105,6 +105,111 @@ function serveTrackerJs() {
   }, { timeout: 5000 });
 }
 
+function decodeFormComponent(value) {
+  return decodeUriComponent(value.split('+').join(' '));
+}
+
+function addParam(params, key, value) {
+  const existing = params[key];
+  if (existing === undefined) {
+    params[key] = value;
+  } else if (getType(existing) === 'array') {
+    existing.push(value);
+  } else {
+    params[key] = [existing, value];
+  }
+}
+
+function parseQuery(qs) {
+  const params = {};
+  let query = makeString(qs || '');
+  if (query.charAt(0) === '?') query = query.substring(1);
+  query.split('&').forEach(function (pair) {
+    if (!pair) return;
+    const eq = pair.indexOf('=');
+    const key = decodeFormComponent(eq === -1 ? pair : pair.substring(0, eq));
+    const value = eq === -1 ? '' : decodeFormComponent(pair.substring(eq + 1));
+    if (!key || value === undefined) return;
+    addParam(params, key, value);
+  });
+  return params;
+}
+
+function hitValue(hit, key) {
+  const value = hit[key];
+  return getType(value) === 'array' ? value[0] : value;
+}
+
+function extractHits() {
+  const queryParams = parseQuery(getRequestQueryString());
+  const body = makeString(getRequestBody() || '').trim();
+  if (body.charAt(0) === '{') {
+    const parsed = JSON.parse(body);
+    if (parsed && getType(parsed.requests) === 'array') {
+      return parsed.requests.map(function (request) {
+        const s = makeString(request);
+        const q = s.indexOf('?');
+        return parseQuery(q === -1 ? s : s.substring(q + 1));
+      });
+    }
+    return [];
+  }
+  if (body.length) {
+    const bodyParams = parseQuery(body);
+    Object.keys(bodyParams).forEach(function (k) { queryParams[k] = bodyParams[k]; });
+    return [queryParams];
+  }
+  return Object.keys(queryParams).length ? [queryParams] : [];
+}
+
+function isHeatmapHit(hit) {
+  return Object.keys(hit).some(function (k) { return k.indexOf('hsr_') === 0; });
+}
+
+function buildEvent(hit) {
+  return {
+    event_name: 'page_view',
+    'x-matomo-hit': hit,
+    'x-matomo-idsite': hitValue(hit, 'idsite')
+  };
+}
+
+function handleHits() {
+  const origin = getRequestHeader('origin');
+  if (!isOriginAllowed(origin)) {
+    setResponseStatus(403);
+    returnResponse();
+    return;
+  }
+  const wantsImage = getRequestMethod() === 'GET' &&
+    hitValue(parseQuery(getRequestQueryString()), 'send_image') === '1';
+  const hits = extractHits().filter(function (hit) {
+    Object.delete(hit, 'token_auth');
+    return hitValue(hit, 'idsite') && !isHeatmapHit(hit);
+  });
+  let pending = hits.length;
+  const respond = function () {
+    setCorsHeaders(origin);
+    setResponseHeader('Cache-Control', 'no-store');
+    if (wantsImage) {
+      setPixelResponse();
+    } else {
+      setResponseStatus(204);
+    }
+    returnResponse();
+  };
+  if (pending === 0) {
+    respond();
+    return;
+  }
+  hits.forEach(function (hit) {
+    runContainer(buildEvent(hit), function () {
+      pending = pending - 1;
+      if (pending === 0) respond();
+    });
+  });
+}
+
 // ---- main ----
 const requestPath = getRequestPath();
 const requestMethod = getRequestMethod();
@@ -112,7 +217,11 @@ const requestMethod = getRequestMethod();
 if (requestPath === jsPath && requestMethod === 'GET') {
   claimRequest();
   serveTrackerJs();
-} else if (requestPath === trackerPath && requestMethod === 'OPTIONS') {
+} else if (requestPath === trackerPath) {
   claimRequest();
-  handlePreflight();
+  if (requestMethod === 'OPTIONS') {
+    handlePreflight();
+  } else {
+    handleHits();
+  }
 }

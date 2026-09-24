@@ -226,6 +226,111 @@ function serveTrackerJs() {
   }, { timeout: 5000 });
 }
 
+function decodeFormComponent(value) {
+  return decodeUriComponent(value.split('+').join(' '));
+}
+
+function addParam(params, key, value) {
+  const existing = params[key];
+  if (existing === undefined) {
+    params[key] = value;
+  } else if (getType(existing) === 'array') {
+    existing.push(value);
+  } else {
+    params[key] = [existing, value];
+  }
+}
+
+function parseQuery(qs) {
+  const params = {};
+  let query = makeString(qs || '');
+  if (query.charAt(0) === '?') query = query.substring(1);
+  query.split('&').forEach(function (pair) {
+    if (!pair) return;
+    const eq = pair.indexOf('=');
+    const key = decodeFormComponent(eq === -1 ? pair : pair.substring(0, eq));
+    const value = eq === -1 ? '' : decodeFormComponent(pair.substring(eq + 1));
+    if (!key || value === undefined) return;
+    addParam(params, key, value);
+  });
+  return params;
+}
+
+function hitValue(hit, key) {
+  const value = hit[key];
+  return getType(value) === 'array' ? value[0] : value;
+}
+
+function extractHits() {
+  const queryParams = parseQuery(getRequestQueryString());
+  const body = makeString(getRequestBody() || '').trim();
+  if (body.charAt(0) === '{') {
+    const parsed = JSON.parse(body);
+    if (parsed && getType(parsed.requests) === 'array') {
+      return parsed.requests.map(function (request) {
+        const s = makeString(request);
+        const q = s.indexOf('?');
+        return parseQuery(q === -1 ? s : s.substring(q + 1));
+      });
+    }
+    return [];
+  }
+  if (body.length) {
+    const bodyParams = parseQuery(body);
+    Object.keys(bodyParams).forEach(function (k) { queryParams[k] = bodyParams[k]; });
+    return [queryParams];
+  }
+  return Object.keys(queryParams).length ? [queryParams] : [];
+}
+
+function isHeatmapHit(hit) {
+  return Object.keys(hit).some(function (k) { return k.indexOf('hsr_') === 0; });
+}
+
+function buildEvent(hit) {
+  return {
+    event_name: 'page_view',
+    'x-matomo-hit': hit,
+    'x-matomo-idsite': hitValue(hit, 'idsite')
+  };
+}
+
+function handleHits() {
+  const origin = getRequestHeader('origin');
+  if (!isOriginAllowed(origin)) {
+    setResponseStatus(403);
+    returnResponse();
+    return;
+  }
+  const wantsImage = getRequestMethod() === 'GET' &&
+    hitValue(parseQuery(getRequestQueryString()), 'send_image') === '1';
+  const hits = extractHits().filter(function (hit) {
+    Object.delete(hit, 'token_auth');
+    return hitValue(hit, 'idsite') && !isHeatmapHit(hit);
+  });
+  let pending = hits.length;
+  const respond = function () {
+    setCorsHeaders(origin);
+    setResponseHeader('Cache-Control', 'no-store');
+    if (wantsImage) {
+      setPixelResponse();
+    } else {
+      setResponseStatus(204);
+    }
+    returnResponse();
+  };
+  if (pending === 0) {
+    respond();
+    return;
+  }
+  hits.forEach(function (hit) {
+    runContainer(buildEvent(hit), function () {
+      pending = pending - 1;
+      if (pending === 0) respond();
+    });
+  });
+}
+
 // ---- main ----
 const requestPath = getRequestPath();
 const requestMethod = getRequestMethod();
@@ -233,9 +338,13 @@ const requestMethod = getRequestMethod();
 if (requestPath === jsPath && requestMethod === 'GET') {
   claimRequest();
   serveTrackerJs();
-} else if (requestPath === trackerPath && requestMethod === 'OPTIONS') {
+} else if (requestPath === trackerPath) {
   claimRequest();
-  handlePreflight();
+  if (requestMethod === 'OPTIONS') {
+    handlePreflight();
+  } else {
+    handleHits();
+  }
 }
 
 
@@ -502,6 +611,70 @@ scenarios:
     runCode(withData({ allowedOrigins: 'https://www.example.com, https://shop.example.com' }));
     assertApi('setResponseStatus').wasCalledWith(403);
     assertApi('setResponseHeader').wasNotCalledWith('Access-Control-Allow-Origin', 'https://evil.example.org');
+- name: GET hit runs the container once and answers 204
+  code: |-
+    const events = runTracker('GET', 'idsite=1&rec=1&url=https%3A%2F%2Fwww.example.com%2F&action_name=Home&send_image=0');
+    assertThat(events.length).isEqualTo(1);
+    assertThat(events[0]['x-matomo-hit'].url).isEqualTo('https://www.example.com/');
+    assertThat(events[0]['x-matomo-idsite']).isEqualTo('1');
+    assertApi('setResponseStatus').wasCalledWith(204);
+    assertApi('setResponseHeader').wasCalledWith('Cache-Control', 'no-store');
+    assertApi('returnResponse').wasCalled();
+- name: sendBeacon POST with parameters in query and empty body
+  code: |-
+    const events = runTracker('POST', 'idsite=1&rec=1&action_name=Home', '');
+    assertThat(events.length).isEqualTo(1);
+    assertThat(events[0]['x-matomo-hit'].action_name).isEqualTo('Home');
+- name: POST body is decoded as form-urlencoded with UTF-8 and plus signs
+  code: |-
+    const events = runTracker('POST', '', 'idsite=1&rec=1&action_name=Caf%C3%A9+cr%C3%A8me&url=https%3A%2F%2Fx.fr%2F');
+    assertThat(events[0]['x-matomo-hit'].action_name).isEqualTo('Café crème');
+    assertThat(events[0]['x-matomo-hit'].url).isEqualTo('https://x.fr/');
+- name: bulk request runs one container per hit and answers once
+  code: |-
+    let responses = 0;
+    mock('returnResponse', function () { responses = responses + 1; });
+    const body = '{"requests":["?idsite=1&rec=1&e_c=a","?idsite=1&rec=1&e_c=b","?idsite=1&rec=1&hsr_vid=abc","?idsite=1&rec=1&e_c=c"],"send_image":0}';
+    const events = runTracker('POST', '', body);
+    assertThat(events.length).isEqualTo(3);
+    assertThat(events[2]['x-matomo-hit'].e_c).isEqualTo('c');
+    assertThat(responses).isEqualTo(1);
+    assertApi('setResponseStatus').wasCalledWith(204);
+- name: token_auth sent by a browser is stripped
+  code: |-
+    const events = runTracker('GET', 'idsite=1&rec=1&token_auth=secret');
+    assertThat(events[0]['x-matomo-hit'].token_auth).isUndefined();
+- name: repeated keys become arrays
+  code: |-
+    const events = runTracker('GET', 'idsite=1&rec=1&fa_fp%5B%5D=a&fa_fp%5B%5D=b');
+    assertThat(events[0]['x-matomo-hit']['fa_fp[]']).isEqualTo(['a', 'b']);
+- name: empty request answers 204 without running the container
+  code: |-
+    const events = runTracker('POST', '', '');
+    assertThat(events.length).isEqualTo(0);
+    assertApi('setResponseStatus').wasCalledWith(204);
+    assertApi('returnResponse').wasCalled();
+- name: hit without idsite is ignored
+  code: |-
+    const events = runTracker('GET', 'rec=1&url=https%3A%2F%2Fx.fr%2F');
+    assertThat(events.length).isEqualTo(0);
+    assertApi('setResponseStatus').wasCalledWith(204);
+- name: GET with send_image=1 returns a pixel
+  code: |-
+    runTracker('GET', 'idsite=1&rec=1&send_image=1');
+    assertApi('setPixelResponse').wasCalled();
+    assertApi('setResponseStatus').wasNotCalledWith(204);
+- name: hit response carries CORS headers when Origin is present
+  code: |-
+    mock('getRequestHeader', headers({ origin: 'https://www.example.com' }));
+    runTracker('POST', 'idsite=1&rec=1', '');
+    assertApi('setResponseHeader').wasCalledWith('Access-Control-Allow-Origin', 'https://www.example.com');
+- name: hit from an origin that is not allowed is rejected
+  code: |-
+    mock('getRequestHeader', headers({ origin: 'https://evil.example.org' }));
+    const events = runTracker('POST', 'idsite=1&rec=1', '', { allowedOrigins: 'https://www.example.com' });
+    assertThat(events.length).isEqualTo(0);
+    assertApi('setResponseStatus').wasCalledWith(403);
 setup: |-
   const encodeUriComponent = require('encodeUriComponent');
   const Object = require('Object');
