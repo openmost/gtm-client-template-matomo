@@ -5,7 +5,7 @@ A server-side GTM **Client** that makes Matomo tracking first-party. The browser
 - serves `matomo.js` (premium plugins included) from your own domain, on a path of your choice, with caching;
 - serves **Matomo Tag Manager containers** (`/js/container_XXXX.js`) and the **opt-out script** the same way;
 - receives every `matomo.php` hit — GET, `sendBeacon` POST, XHR POST and **bulk** requests — and answers like Matomo (`204` or GIF) with proper CORS headers;
-- runs the container **once per hit, in order**, with the raw Matomo hit preserved in `x-matomo-hit`. The [**Matomo (server)**](https://github.com/openmost/gtm-tag-template-matomo-server) tag forwards it to Matomo losslessly.
+- runs the container **once per hit, in order**, with the raw Matomo hit preserved in `x-matomo-hit`. The [**Matomo**](https://github.com/openmost/gtm-tag-template-matomo-server) tag forwards it to Matomo losslessly.
 
 Supports FormAnalytics, MediaAnalytics, AbTesting (including redirect experiments), CrashAnalytics, ecommerce, goals, content tracking, custom dimensions and page performance. Heatmaps & session recording are intentionally not proxied.
 
@@ -17,11 +17,11 @@ Authored by Ronan HELLO — [Openmost](https://openmost.com).
 
 ```
 browser ──matomo.js / hits──► Matomo Client ──event──► server container
-                                                         ├─ Matomo (server) tag ──► Matomo
+                                                         ├─ Matomo tag ─────────► Matomo
                                                          └─ optional: Google Ads, Meta CAPI…
 ```
 
-The client itself sends nothing to Matomo: add the **Matomo (server)** tag, triggered on events claimed by this client. Because hits go through your container, you can also filter, enrich or strip them before they reach Matomo, and keep the URL of your Matomo instance private.
+The client itself sends nothing to Matomo: add the **Matomo** tag (server-side), triggered on events claimed by this client. Because hits go through your container, you can also filter, enrich or strip them before they reach Matomo, and keep the URL of your Matomo instance private.
 
 ## Setup with the JavaScript tracker
 
@@ -47,7 +47,7 @@ The client itself sends nothing to Matomo: add the **Matomo (server)** tag, trig
 </script>
 ```
 
-3. Add the **Matomo (server)** tag with the trigger `Client Name equals <name of this client>`.
+3. Add the **Matomo** server-side tag with the trigger `Client Name equals <name of this client>`.
 
 ## Setup with Matomo Tag Manager
 
